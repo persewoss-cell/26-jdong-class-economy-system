@@ -12813,6 +12813,31 @@ div[data-testid="stRadio"]:has(input[id*="stat_cellpick_"]) > div {
   padding: 0 !important;
 }
 
+/* 열 상단 일괄 버튼도 동일 UI/사이즈 사용 */
+div[role="radiogroup"]:has(input[id*="stat_colpick_"]) {
+  display: flex !important;
+  justify-content: center !important;
+  align-items: center !important;
+  gap: 4px !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+div[role="radiogroup"]:has(input[id*="stat_colpick_"]) > label {
+  border: 1px solid #d1d5db !important;
+  background: #ffffff !important;
+  border-radius: 999px !important;
+  width: 18px !important;
+  height: 18px !important;
+  min-height: 18px !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  line-height: 1 !important;
+  font-size: 0.75rem !important;
+}
+
 /* 6) label 안의 불필요한 텍스트/여백 요소가 높이 만드는 경우까지 눌러버리기 */
 div[role="radiogroup"]:has(input[id*="stat_cellpick_"]) > label * {
   margin: 0 !important;
@@ -12821,6 +12846,12 @@ div[role="radiogroup"]:has(input[id*="stat_cellpick_"]) > label * {
 }
 /* stRadio를 감싸는 상위 컨테이너 여백까지 제거 (통계셀만) */
 div[data-testid="stElementContainer"]:has(input[id*="stat_cellpick_"]) {
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+  margin-top: 0 !important;
+  margin-bottom: 0 !important;
+}
+div[data-testid="stElementContainer"]:has(input[id*="stat_colpick_"]) {
   padding-top: 0 !important;
   padding-bottom: 0 !important;
   margin-top: 0 !important;
@@ -12851,6 +12882,18 @@ div[data-testid="stElementContainer"]:has(input[id*="stat_cellpick_"]) {
             border-color: #3b82f6 !important;
             box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.4) !important;
         }
+        div[role="radiogroup"]:has(input[id*="stat_colpick_"]) label:has(input[value="O"]:checked) > div:last-child {
+            border-color: #10b981 !important;
+            box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.4) !important;
+        }
+        div[role="radiogroup"]:has(input[id*="stat_colpick_"]) label:has(input[value="X"]:checked) > div:last-child {
+            border-color: #ef4444 !important;
+            box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.4) !important;
+        }
+        div[role="radiogroup"]:has(input[id*="stat_colpick_"]) label:has(input[value="△"]:checked) > div:last-child {
+            border-color: #3b82f6 !important;
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.4) !important;
+        }
 
 /* ===== (PATCH) 통계표 헤더를 라디오와 같은 기준(왼쪽 정렬)으로 맞추기 ===== */
 .stat_hdr_cell{
@@ -12874,10 +12917,12 @@ div[data-testid="stElementContainer"]:has(input[id*="stat_cellpick_"]) {
 .stat_row_text{
   display:flex !important;
   align-items:center !important;
+  height:34px !important;  
   min-height:18px !important;
   margin:0 !important;
   padding:0 !important;
 }
+.stat_bulk_marker{height:0; margin:0; padding:0;}
 
 /* 학생 행 사이 얇은 구분선 */
 .stat_row_sep{
@@ -12906,8 +12951,52 @@ div[data-testid="stElementContainer"]:has(input[id*="stat_cellpick_"]) {
                         unsafe_allow_html=True,
                     )
 
-            st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
+            # 열별 일괄 적용(O/X/△): 각 제출물(열)의 모든 학생 상태를 동일 값으로 변경
+            def _apply_all_for_submission(submission_id: str, value: str):
+                submission_id = str(submission_id)
+                if value not in ("O", "X", "△"):
+                    return
+                st.session_state["stat_edit"].setdefault(submission_id, {})
+                ver_local = int(st.session_state.get("stat_cell_ver", 0) or 0)
+                for stx in (stu_rows or []):
+                    stid_local = str(stx.get("student_id", "") or "")
+                    if not stid_local:
+                        continue
+                    st.session_state["stat_edit"][submission_id][stid_local] = value
+                    st.session_state[f"stat_cellpick_{ver_local}_{submission_id}_{stid_local}"] = value
 
+            bulk_cols = st.columns([0.37, 0.7] + [1.2] * len(col_titles))
+            with bulk_cols[0]:
+                st.markdown("&nbsp;", unsafe_allow_html=True)
+            with bulk_cols[1]:
+                st.markdown("&nbsp;", unsafe_allow_html=True)
+            for j, sub in enumerate(sub_rows):
+                with bulk_cols[j + 2]:
+                    sub_id = str(sub.get("submission_id", "") or "")
+                    if not sub_id:
+                        continue
+                    st.markdown(f"<div class='stat_bulk_marker' data-column='{sub_id}'></div>", unsafe_allow_html=True)
+                    bulk_key = f"stat_colpick_{sub_id}"
+                    prev_key = f"stat_colpick_prev_{sub_id}"
+                    if bulk_key not in st.session_state:
+                        st.session_state[bulk_key] = "X"
+                    if prev_key not in st.session_state:
+                        st.session_state[prev_key] = st.session_state[bulk_key]
+
+                    picked_bulk = st.radio(
+                        label="",
+                        options=("O", "X", "△"),
+                        horizontal=True,
+                        key=bulk_key,
+                        label_visibility="collapsed",
+                    )
+                    if st.session_state.get(prev_key) != picked_bulk:
+                        _apply_all_for_submission(sub_id, picked_bulk)
+                        st.session_state[prev_key] = picked_bulk
+                        st.rerun()
+
+            st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
+            
             for i, stx in enumerate(stu_rows):
                 stid = str(stx.get("student_id"))
                 no = stx.get("no", 999999)
