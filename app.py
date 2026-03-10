@@ -10750,12 +10750,10 @@ if "👥 계정 정보" in tabs:
                     "번호": int(x.get("no", 0) or 0),
                     "이름": str(x.get("name", "") or "").strip(),
                     "비밀번호": str(x.get("pin", "") or "").strip(),
-                    "입출금활성화": bool(x.get("io_enabled", True)),
-                    "투자활성화": bool(x.get("invest_enabled", True)),
                 }
                 for x in _list_active_students_full_cached()
             ],
-            columns=["번호", "이름", "비밀번호", "입출금활성화", "투자활성화"],
+            columns=["번호", "이름", "비밀번호"],
         )
         if not current_accounts_df.empty:
             current_accounts_df = current_accounts_df.sort_values(["번호", "이름"], ascending=[True, True], kind="mergesort").reset_index(drop=True)
