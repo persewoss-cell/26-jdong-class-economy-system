@@ -273,11 +273,17 @@ def _normalize_payload(data: Dict[str, Any]) -> Dict[str, Any]:
     return {k: _normalize_value(v) for k, v in data.items()}
 
 
+def _normalize_dict_key(key: Any) -> str:
+    """Ensure nested document keys are BSON-safe."""
+    safe_key = str(key)
+    return safe_key.replace(".", "\uff0e").replace("$", "\uff04").replace("\x00", "\ufffd")
+
+
 def _normalize_value(value: Any) -> Any:
     if value is SERVER_TIMESTAMP:
         return datetime.now(timezone.utc)
     if isinstance(value, dict):
-        return {k: _normalize_value(v) for k, v in value.items()}
+        return {_normalize_dict_key(k): _normalize_value(v) for k, v in value.items()}
     if isinstance(value, list):
         return [_normalize_value(v) for v in value]
     return value
