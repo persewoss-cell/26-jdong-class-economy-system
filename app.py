@@ -642,7 +642,7 @@ st.markdown(
     <style>
     div[data-testid="stVerticalBlock"] {
         justify-content: flex-end !important;
-        gap: 0.5rem !important;
+        gap: 0.79rem !important;
     }
 
     div[data-testid="stRadio"] div[role="radiogroup"] {
