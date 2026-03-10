@@ -10744,14 +10744,46 @@ if "👥 계정 정보" in tabs:
         bio = io.BytesIO()
         with pd.ExcelWriter(bio, engine="openpyxl") as writer:
             sample_df.to_excel(writer, index=False, sheet_name="accounts")
-        st.download_button(
-            "📄 샘플 엑셀 다운로드",
-            data=bio.getvalue(),
-            file_name="accounts_sample.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
-            key="acc_bulk_sample_down",
+        current_accounts_df = pd.DataFrame(
+            [
+                {
+                    "번호": int(x.get("no", 0) or 0),
+                    "이름": str(x.get("name", "") or "").strip(),
+                    "비밀번호": str(x.get("pin", "") or "").strip(),
+                    "입출금활성화": bool(x.get("io_enabled", True)),
+                    "투자활성화": bool(x.get("invest_enabled", True)),
+                }
+                for x in _list_active_students_full_cached()
+            ],
+            columns=["번호", "이름", "비밀번호", "입출금활성화", "투자활성화"],
         )
+        if not current_accounts_df.empty:
+            current_accounts_df = current_accounts_df.sort_values(["번호", "이름"], ascending=[True, True], kind="mergesort").reset_index(drop=True)
+
+        current_bio = io.BytesIO()
+        with pd.ExcelWriter(current_bio, engine="openpyxl") as writer:
+            current_accounts_df.to_excel(writer, index=False, sheet_name="accounts")
+        current_bio.seek(0)
+
+        down_col1, down_col2 = st.columns(2)
+        with down_col1:
+            st.download_button(
+                "📄 샘플 엑셀 다운로드",
+                data=bio.getvalue(),
+                file_name="accounts_sample.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+                key="acc_bulk_sample_down",
+            )
+        with down_col2:
+            st.download_button(
+                "📄 현재 계정 정보 엑셀 다운로드",
+                data=current_bio.getvalue(),
+                file_name="accounts_current.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+                key="acc_bulk_current_down",
+            )
 
         up = st.file_uploader("📤 엑셀 업로드(xlsx)", type=["xlsx"], key="acc_bulk_upl")
 
