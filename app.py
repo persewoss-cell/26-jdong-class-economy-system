@@ -12927,12 +12927,28 @@ div[data-testid="stElementContainer"]:has(input[id*="stat_colpick_"]) {
 .stat_bulk_text{
   display:flex !important;
   align-items:center !important;
+  justify-content:flex-start !important;  
   height:18px !important;
   min-height:18px !important;
   margin:0 !important;
   padding:0 !important;
-  font-size:0.86rem !important;
+  font-size:1rem !important;
+  font-weight:700 !important;
+  line-height:1.15 !important;
   color:#374151 !important;
+}
+
+/* 번호/이름/일괄적용 영역의 요소 컨테이너 하단 간격 축소 */
+div[data-testid="stElementContainer"]:has(.stat_row_text),
+div[data-testid="stElementContainer"]:has(.stat_bulk_text){
+  margin-bottom:0 !important;
+  padding-bottom:0 !important;
+}
+
+/* 번호/이름 텍스트의 기본 p 태그 마진 제거(행 사이 여백 축소) */
+.stat_row_text p,
+.stat_bulk_text p{
+  margin:0 !important;
 }
 
 .stat_top_sep{
