@@ -1310,8 +1310,8 @@ def api_set_goal_by_student_id(student_id: str, target_amount: int, goal_date_st
                 "student_id": student_id,
                 "target_amount": int(target_amount or 0),
                 "goal_date": goal_date_str,
-                "created_at": mongo.SERVER_TIMESTAMP,
-                "updated_at": mongo.SERVER_TIMESTAMP,
+                "created_at": datetime.utcnow(),
+                "updated_at": datetime.utcnow(),
             },
             merge=True,
         )
@@ -1502,7 +1502,7 @@ def api_admin_bulk_deposit(admin_pin: str, amount: int, memo: str):
                     "balance_after": new_bal,
                     "memo": memo,
                     "recorder": recorder,
-                    "created_at": mongo.SERVER_TIMESTAMP,
+                    "created_at": datetime.utcnow(),
                 },
             )
 
@@ -1545,7 +1545,7 @@ def api_admin_bulk_withdraw(admin_pin: str, amount: int, memo: str):
                     "balance_after": new_bal,
                     "memo": memo,
                     "recorder": recorder,
-                    "created_at": mongo.SERVER_TIMESTAMP,
+                    "created_at": datetime.utcnow(),
                 },
             )
 
@@ -1794,7 +1794,7 @@ def api_admin_upsert_stat_template(admin_pin: str, template_id: str, label: str,
         ref = db.collection("stat_templates").document(str(row["template_id"]))
         payload = {"label": str(row.get("label", "") or ""), "order": idx}
         if row["template_id"] == target_id and not is_update:
-            payload["created_at"] = mongo.SERVER_TIMESTAMP
+            payload["created_at"] = datetime.utcnow()
         batch.set(ref, payload, merge=True)
     batch.commit()
 
@@ -1839,7 +1839,7 @@ def api_admin_add_stat_submission(admin_pin: str, label: str, active_accounts: l
             "date_iso": today.isoformat(),
             "date_display": format_kr_md_date(today),
             "statuses": statuses,
-            "created_at": mongo.SERVER_TIMESTAMP,
+            "created_at": datetime.utcnow(),
         }
     )
 
@@ -1921,7 +1921,7 @@ def api_create_account(name, pin):
             "credit_grade": DEFAULT_CREDIT_GRADE,            
             "is_active": True,
             "role_id": "",
-            "created_at": mongo.SERVER_TIMESTAMP,
+            "created_at": datetime.utcnow(),
         }
     )
     api_list_accounts_cached.clear()
@@ -2013,7 +2013,7 @@ def api_add_tx(name, pin, memo, deposit, withdraw):
                 "balance_after": int(new_bal),
                 "memo": memo,
                 "recorder": recorder,
-                "created_at": mongo.SERVER_TIMESTAMP,
+                "created_at": datetime.utcnow(),
             },
         )
         return new_bal
@@ -2081,7 +2081,7 @@ def api_admin_add_tx_by_student_id(
                 "balance_after": int(new_bal),
                 "memo": memo,
                 "recorder": recorder,
-                "created_at": mongo.SERVER_TIMESTAMP,
+                "created_at": datetime.utcnow(),
             },
         )
         return new_bal
@@ -2158,7 +2158,7 @@ def api_broker_deposit_by_student_id(actor_student_id: str, student_id: str, mem
                     "balance_after": new_bal,
                     "memo": memo,
                     "recorder": _get_admin_action_recorder(),
-                    "created_at": mongo.SERVER_TIMESTAMP,
+                    "created_at": datetime.utcnow(),
                 },
             )
             return new_bal
@@ -2286,7 +2286,7 @@ def api_create_deposit_request(name: str, pin: str, memo: str, amount: int, appl
             "apply_treasury": bool(apply_treasury),
             "treasury_memo": treasury_memo,
             "status": "pending",
-            "created_at": mongo.SERVER_TIMESTAMP,
+            "created_at": datetime.utcnow(),
             "processed_at": None,
             "tx_id": "",
         }
@@ -2396,7 +2396,7 @@ def api_admin_approve_deposit_request(admin_pin: str, request_id: str):
                 "balance_after": int(new_bal),
                 "memo": memo,
                 "recorder": _get_recorder_label(True, str(globals().get("login_name", "") or "").strip()),
-                "created_at": mongo.SERVER_TIMESTAMP,
+                "created_at": datetime.utcnow(),
             },
         )
 
@@ -2405,7 +2405,7 @@ def api_admin_approve_deposit_request(admin_pin: str, request_id: str):
             req_ref,
             {
                 "status": "approved",
-                "processed_at": mongo.SERVER_TIMESTAMP,
+                "processed_at": datetime.utcnow(),
                 "tx_id": str(tx_ref.id),
             },
         )
@@ -2455,7 +2455,7 @@ def api_admin_reject_deposit_request(admin_pin: str, request_id: str):
 
         transaction.update(
             req_ref,
-            {"status": "rejected", "processed_at": mongo.SERVER_TIMESTAMP}
+            {"status": "rejected", "processed_at": datetime.utcnow()}
         )
         return True
 
@@ -2654,7 +2654,7 @@ def api_admin_rollback_selected(admin_pin: str, student_id: str, tx_ids: list[st
                     "treasury_memo": str(rollback_memo),
                     "related_tx": tid,
                     "recorder": _get_recorder_label(True, str(globals().get("login_name", "") or "").strip()),
-                    "created_at": mongo.SERVER_TIMESTAMP,
+                    "created_at": datetime.utcnow(),
                 },
             )
             return new_bal
@@ -2780,7 +2780,7 @@ def api_savings_create(login_name: str, login_pin: str, principal: int, weeks: i
                 "balance_after": new_bal,
                 "memo": f"적금 가입({weeks}주)",
                 "recorder": str((student_doc.to_dict() or {}).get("name", "") or login_name or ""),
-                "created_at": mongo.SERVER_TIMESTAMP,
+                "created_at": datetime.utcnow(),
             },
         )
         transaction.set(
@@ -2790,7 +2790,7 @@ def api_savings_create(login_name: str, login_pin: str, principal: int, weeks: i
                 "principal": principal,
                 "weeks": weeks,
                 "interest": interest,
-                "start_date": mongo.SERVER_TIMESTAMP,
+                "start_date": datetime.utcnow(),
                 "maturity_date": maturity_date,
                 "status": "active",
             },
@@ -2850,7 +2850,7 @@ def api_savings_cancel(login_name: str, login_pin: str, savings_id: str):
                 "balance_after": new_bal,
                 "memo": f"적금 해지({weeks}주)",
                 "recorder": str((student_doc.to_dict() or {}).get("name", "") or login_name or ""),
-                "created_at": mongo.SERVER_TIMESTAMP,
+                "created_at": datetime.utcnow(),
             },
         )
         return principal
@@ -2917,7 +2917,7 @@ def api_process_maturities(login_name: str, login_pin: str):
                     "balance_after": new_bal,
                     "memo": f"적금 만기({weeks}주)",
                     "recorder": _get_recorder_label(False, str((student_doc.to_dict() or {}).get("name", "") or login_name or "")),
-                    "created_at": mongo.SERVER_TIMESTAMP,
+                    "created_at": datetime.utcnow(),
                 },
             )
             return new_bal
@@ -2939,7 +2939,7 @@ def api_get_treasury_state_cached():
     ref = db.collection("treasury").document("state")
     snap = ref.get()
     if not snap.exists:
-        ref.set({"balance": 0, "updated_at": mongo.SERVER_TIMESTAMP}, merge=True)
+        ref.set({"balance": 0, "updated_at": datetime.utcnow()}, merge=True)
         return {"ok": True, "balance": 0}
     d = snap.to_dict() or {}
     return {"ok": True, "balance": int(d.get("balance", 0) or 0)}
@@ -2990,7 +2990,7 @@ def api_add_treasury_tx(
             state_ref,
             {
                 "balance": int(new_bal),
-                "updated_at": mongo.SERVER_TIMESTAMP,
+                "updated_at": datetime.utcnow(),
             },
             merge=True,
         )
@@ -3006,7 +3006,7 @@ def api_add_treasury_tx(
                 "memo": memo,
                 "actor": str(actor or ""),
                 "recorder": recorder,
-                "created_at": mongo.SERVER_TIMESTAMP,
+                "created_at": datetime.utcnow(),
             },
         )
         return new_bal
@@ -3058,7 +3058,7 @@ def _treasury_apply_in_transaction(transaction, memo: str, signed_amount: int, a
         state_ref,
         {
             "balance": int(new_bal),
-            "updated_at": mongo.SERVER_TIMESTAMP,
+            "updated_at": datetime.utcnow(),
         },
         merge=True,
     )
@@ -3073,7 +3073,7 @@ def _treasury_apply_in_transaction(transaction, memo: str, signed_amount: int, a
             "memo": memo,
             "actor": str(actor or ""),
             "recorder": recorder,
-            "created_at": mongo.SERVER_TIMESTAMP,
+            "created_at": datetime.utcnow(),
         },
     )
 
@@ -3137,7 +3137,7 @@ def api_add_tx_with_treasury(name, pin, memo, deposit, withdraw, apply_treasury:
                 "balance_after": new_bal,
                 "memo": memo,
                 "recorder": recorder,
-                "created_at": mongo.SERVER_TIMESTAMP,
+                "created_at": datetime.utcnow(),
             },
         )
 
@@ -3222,7 +3222,7 @@ def api_admin_add_tx_by_student_id_with_treasury(
                 "balance_after": new_bal,
                 "memo": memo,
                 "recorder": recorder,
-                "created_at": mongo.SERVER_TIMESTAMP,
+                "created_at": datetime.utcnow(),
             },
         )
 
@@ -3269,7 +3269,7 @@ def api_treasury_auto_bulk_adjust(memo: str, signed_amount: int, actor: str = "a
 
         transaction.set(
             state_ref,
-            {"balance": int(new_bal), "updated_at": mongo.SERVER_TIMESTAMP},
+            {"balance": int(new_bal), "updated_at": datetime.utcnow()},
             merge=True,
         )
         transaction.set(
@@ -3283,7 +3283,7 @@ def api_treasury_auto_bulk_adjust(memo: str, signed_amount: int, actor: str = "a
                 "memo": memo,
                 "actor": str(actor or ""),
                 "recorder": _get_admin_action_recorder(recorder_override),
-                "created_at": mongo.SERVER_TIMESTAMP,
+                "created_at": datetime.utcnow(),
             },
         )
         return new_bal
@@ -3369,7 +3369,7 @@ def api_upsert_treasury_template(admin_pin: str, template_id: str, label: str, k
             "kind": kind,
             "amount": amount,
             "order": order,
-            "updated_at": mongo.SERVER_TIMESTAMP,
+            "updated_at": datetime.utcnow(),
         },
         merge=True,
     )
@@ -3868,10 +3868,10 @@ def api_open_auction(admin_pin: str, bid_name: str, affiliation: str):
                 "bid_name": bid_name,
                 "affiliation": affiliation,
                 "status": "open",
-                "opened_at": mongo.SERVER_TIMESTAMP,
+                "opened_at": datetime.utcnow(),
                 "closed_at": None,
                 "ledger_applied": False,
-                "created_at": mongo.SERVER_TIMESTAMP,
+                "created_at": datetime.utcnow(),
             },
         )
         tx.set(
@@ -3880,7 +3880,7 @@ def api_open_auction(admin_pin: str, bid_name: str, affiliation: str):
                 "current_round_no": next_no,
                 "current_round_id": round_ref.id,
                 "status": "open",
-                "updated_at": mongo.SERVER_TIMESTAMP,
+                "updated_at": datetime.utcnow(),
             },
             merge=True,
         )
@@ -3952,7 +3952,7 @@ def api_submit_auction_bid(name: str, pin: str, amount: int):
                 "balance_after": int(new_bal),
                 "memo": memo,
                 "recorder": str(student_name or name or ""),
-                "created_at": mongo.SERVER_TIMESTAMP,
+                "created_at": datetime.utcnow(),
             },
         )
         tx.set(
@@ -3966,7 +3966,7 @@ def api_submit_auction_bid(name: str, pin: str, amount: int):
                 "affiliation": str(round_row.get("affiliation", "") or ""),
                 "bid_name": str(round_row.get("bid_name", "") or ""),
                 "amount": int(amount),
-                "submitted_at": mongo.SERVER_TIMESTAMP,
+                "submitted_at": datetime.utcnow(),
                 "status": "submitted",
             },
         )
@@ -3995,7 +3995,7 @@ def api_close_auction(admin_pin: str):
     db.collection("auction_rounds").document(round_id).set(
         {
             "status": "closed",
-            "closed_at": mongo.SERVER_TIMESTAMP,
+            "closed_at": datetime.utcnow(),
         },
         merge=True,
     )
@@ -4003,7 +4003,7 @@ def api_close_auction(admin_pin: str):
         {
             "current_round_id": "",
             "status": "closed",
-            "updated_at": mongo.SERVER_TIMESTAMP,
+            "updated_at": datetime.utcnow(),
         },
         merge=True,
     )
@@ -4126,7 +4126,7 @@ def api_apply_auction_ledger(admin_pin: str, round_id: str, refund_non_winners: 
                     "balance_after": int(new_bal),
                     "memo": f"[경매 {int(r.get('round_no', 0) or 0):02d}회] 낙찰 실패 입찰금 반환(수수료 10% 차감)",
                     "recorder": "관리자",
-                    "created_at": mongo.SERVER_TIMESTAMP,
+                    "created_at": datetime.utcnow(),
                 }
             )
 
@@ -4170,11 +4170,11 @@ def api_apply_auction_ledger(admin_pin: str, round_id: str, refund_non_winners: 
             "refund_non_winners": bool(refund_non_winners),
             "fee_amount": int(fee_total),
             "winner_amount": int(winner_amount),
-            "created_at": mongo.SERVER_TIMESTAMP,
+            "created_at": datetime.utcnow(),
         }
     )
 
-    r_ref.set({"ledger_applied": True, "ledger_applied_at": mongo.SERVER_TIMESTAMP}, merge=True)
+    r_ref.set({"ledger_applied": True, "ledger_applied_at": datetime.utcnow()}, merge=True)
     return {"ok": True, "total": int(tre_total), "participants": participants, "fee_total": int(fee_total)}
     
 def api_list_auction_admin_ledger(limit=100):
@@ -4335,10 +4335,10 @@ def api_open_lottery(admin_pin: str, cfg: dict):
                 "winners": [],
                 "payout_done": False,
                 "ledger_applied": False,
-                "opened_at": mongo.SERVER_TIMESTAMP,
+                "opened_at": datetime.utcnow(),
                 "closed_at": None,
                 "drawn_at": None,
-                "created_at": mongo.SERVER_TIMESTAMP,
+                "created_at": datetime.utcnow(),
             },
         )
         tx.set(
@@ -4347,7 +4347,7 @@ def api_open_lottery(admin_pin: str, cfg: dict):
                 "current_round_no": int(next_no),
                 "current_round_id": round_ref.id,
                 "status": "open",
-                "updated_at": mongo.SERVER_TIMESTAMP,
+                "updated_at": datetime.utcnow(),
             },
             merge=True,
         )
@@ -4385,8 +4385,8 @@ def api_close_lottery(admin_pin: str):
         if str(r.get("status", "")) != "open":
             raise ValueError("진행 중인 복권만 마감할 수 있습니다.")
 
-        tx.update(r_ref, {"status": "closed", "closed_at": mongo.SERVER_TIMESTAMP})
-        tx.set(state_ref, {"status": "closed", "updated_at": mongo.SERVER_TIMESTAMP}, merge=True)
+        tx.update(r_ref, {"status": "closed", "closed_at": datetime.utcnow()})
+        tx.set(state_ref, {"status": "closed", "updated_at": datetime.utcnow()}, merge=True)
         return {"round_id": rid, "round_no": int(r.get("round_no", 0) or 0)}
 
     try:
@@ -4552,7 +4552,7 @@ def api_submit_lottery_entry(name: str, pin: str, numbers: list[int]):
                 "balance_after": int(new_bal),
                 "memo": f"복권 {int(round_no)}회 구매",
                 "recorder": str(s.get("name", "") or name or ""),
-                "created_at": mongo.SERVER_TIMESTAMP,
+                "created_at": datetime.utcnow(),
             },
         )
         tx.set(
@@ -4564,7 +4564,7 @@ def api_submit_lottery_entry(name: str, pin: str, numbers: list[int]):
                 "student_no": int(s.get("no", 0) or 0),
                 "student_name": str(s.get("name", "") or name),
                 "numbers": nums,
-                "submitted_at": mongo.SERVER_TIMESTAMP,
+                "submitted_at": datetime.utcnow(),
                 "ticket_price": int(price),
             },
         )
@@ -4639,7 +4639,7 @@ def api_submit_lottery_entries(name: str, pin: str, games: list[list[int]]):
                 "balance_after": int(new_bal),
                 "memo": f"복권 {int(round_no)}회 {len(normalized_games)}게임 구매",
                 "recorder": str(s.get("name", "") or name or ""),
-                "created_at": mongo.SERVER_TIMESTAMP,
+                "created_at": datetime.utcnow(),
             },
         )
 
@@ -4654,7 +4654,7 @@ def api_submit_lottery_entries(name: str, pin: str, games: list[list[int]]):
                     "student_no": int(s.get("no", 0) or 0),
                     "student_name": str(s.get("name", "") or name),
                     "numbers": nums,
-                    "submitted_at": mongo.SERVER_TIMESTAMP,
+                    "submitted_at": datetime.utcnow(),
                     "ticket_price": int(price),
                 },
             )
@@ -4731,7 +4731,7 @@ def api_submit_admin_lottery_entries(admin_pin: str, game_count: int, apply_trea
                     "student_no": 0,
                     "student_name": ADMIN_NAME,
                     "numbers": nums,
-                    "submitted_at": mongo.SERVER_TIMESTAMP,
+                    "submitted_at": datetime.utcnow(),
                     "ticket_price": int(price),
                     "is_admin": True,
                     "treasury_applied": bool(apply_treasury),
@@ -4860,7 +4860,7 @@ def api_draw_lottery(admin_pin: str, round_id: str, winning_numbers: list[int]):
             "ticket_count": int(len(entries)),
             "payout_total": int(payout_total),
             "tax_total": int(tax_total),
-            "drawn_at": mongo.SERVER_TIMESTAMP,
+            "drawn_at": datetime.utcnow(),
         },
         merge=True,
     )
@@ -4908,7 +4908,7 @@ def api_pay_lottery_prizes(admin_pin: str, round_id: str):
     r_ref.set(
         {
             "payout_done": True,
-            "payout_done_at": mongo.SERVER_TIMESTAMP,
+            "payout_done_at": datetime.utcnow(),
             "payout_total": int(paid_total),
         },
         merge=True,
@@ -5032,10 +5032,10 @@ def api_apply_lottery_ledger(admin_pin: str, round_id: str):
             "national_amount": int(national_amount),
             "admin_winning_total": int(admin_winning_total),
             "drawn_at": r.get("drawn_at"),
-            "created_at": mongo.SERVER_TIMESTAMP,
+            "created_at": datetime.utcnow(),
         }
     )
-    r_ref.set({"ledger_applied": True, "ledger_applied_at": mongo.SERVER_TIMESTAMP}, merge=True)
+    r_ref.set({"ledger_applied": True, "ledger_applied_at": datetime.utcnow()}, merge=True)
     return {"ok": True}
 
 
@@ -5074,7 +5074,7 @@ def api_list_lottery_admin_ledger(limit=200):
                             "tax_total": int(tax_total),
                             "national_amount": int(national_amount),
                             "admin_winning_total": int(admin_winning_total),
-                            "updated_at": mongo.SERVER_TIMESTAMP,
+                            "updated_at": datetime.utcnow(),
                         },
                         merge=True,
                     )
@@ -5141,7 +5141,7 @@ def api_set_mart_weekly_limit(admin_pin: str, weekly_limit: int):
         return {"ok": False, "error": "관리자 PIN이 틀립니다."}
     try:
         db.collection("configs").document("mart").set(
-            {"weekly_limit": int(weekly_limit or 0), "updated_at": mongo.SERVER_TIMESTAMP},
+            {"weekly_limit": int(weekly_limit or 0), "updated_at": datetime.utcnow()},
             merge=True,
         )
         return {"ok": True}
@@ -5208,7 +5208,7 @@ def _normalize_mart_template_orders(preferred_template_id: str = "", preferred_o
         if int(r.get("order", 999999) or 999999) != i:
             batch.set(
                 db.collection("mart_templates").document(str(r["template_id"])),
-                {"order": i, "updated_at": mongo.SERVER_TIMESTAMP},
+                {"order": i, "updated_at": datetime.utcnow()},
                 merge=True,
             )
             dirty = True
@@ -5236,8 +5236,8 @@ def api_upsert_mart_template(
                 "item": item,
                 "price": int(price or 0),
                 "order": max(1, int(order or 1)),
-                "updated_at": mongo.SERVER_TIMESTAMP,
-                "created_at": mongo.SERVER_TIMESTAMP,
+                "updated_at": datetime.utcnow(),
+                "created_at": datetime.utcnow(),
             },
             merge=True,
         )
@@ -5311,7 +5311,7 @@ def api_create_mart_request(name: str, pin: str, item: str, price: int):
                 "price": int(price),
                 "status": "pending",
                 "week_key": _mart_week_key(),
-                "created_at": mongo.SERVER_TIMESTAMP,
+                "created_at": datetime.utcnow(),
             },
             merge=True,
         )
@@ -5396,7 +5396,7 @@ def api_admin_approve_mart_request(admin_pin: str, request_id: str):
             return {"ok": False, "error": pay_res.get("error", "결제 실패")}
 
         ref.set(
-            {"status": "approved", "approved_at": mongo.SERVER_TIMESTAMP, "approved_by": approver_label},
+            {"status": "approved", "approved_at": datetime.utcnow(), "approved_by": approver_label},
             merge=True,
         )
         db.collection("mart_ledger").document().set(
@@ -5407,7 +5407,7 @@ def api_admin_approve_mart_request(admin_pin: str, request_id: str):
                 "student_name": name,
                 "item": item,
                 "price": int(price),
-                "approved_at": mongo.SERVER_TIMESTAMP,
+                "approved_at": datetime.utcnow(),
             },
             merge=True,
         )
@@ -5421,7 +5421,7 @@ def api_admin_reject_mart_request(admin_pin: str, request_id: str):
         return {"ok": False, "error": "관리자 PIN이 틀립니다."}
     try:
         db.collection("mart_requests").document(str(request_id)).set(
-            {"status": "rejected", "rejected_at": mongo.SERVER_TIMESTAMP},
+            {"status": "rejected", "rejected_at": datetime.utcnow()},
             merge=True,
         )
         return {"ok": True}
@@ -5600,7 +5600,7 @@ def upsert_roles_from_paytable(admin_pin: str, pay_df: pd.DataFrame):
                 "desk_rent": desk,
                 "electric_fee": elec,
                 "health_fee": health,
-                "updated_at": mongo.SERVER_TIMESTAMP,
+                "updated_at": datetime.utcnow(),
             },
             merge=True,
         )
@@ -6091,7 +6091,7 @@ with st.sidebar:
                             "role_id": "",
                             "io_enabled": True,
                             "invest_enabled": True,
-                            "created_at": mongo.SERVER_TIMESTAMP,
+                            "created_at": datetime.utcnow(),
                         }
                     )
 
@@ -8741,11 +8741,11 @@ def _render_invest_admin_like(*, inv_admin_ok_flag: bool, force_is_admin: bool, 
                                     "reason": reason2,
                                     "price_before": _as_price1(cur),
                                     "price_after": _as_price1(new_price),
-                                    "created_at": mongo.SERVER_TIMESTAMP,
+                                    "created_at": datetime.utcnow(),
                                 }
                                 db.collection(INV_HIST_COL).document().set(payload)
                                 db.collection(INV_PROD_COL).document(p["product_id"]).set(
-                                    {"current_price": _as_price1(new_price), "updated_at": mongo.SERVER_TIMESTAMP},
+                                    {"current_price": _as_price1(new_price), "updated_at": datetime.utcnow()},
                                     merge=True,
                                 )
                                 toast("주가가 반영되었습니다.", icon="✅")
@@ -9441,7 +9441,7 @@ def _render_invest_admin_like(*, inv_admin_ok_flag: bool, force_is_admin: bool, 
                                     db.collection(INV_LEDGER_COL).document(doc_id).update(
                                         {
                                             "redeemed": True,
-                                            "redeemed_at": mongo.SERVER_TIMESTAMP,
+                                            "redeemed_at": datetime.utcnow(),
                                             "sell_date_label": sell_label,
                                             "sell_price": _as_price1(cur_price),
                                             "diff": _as_price1(diff),
@@ -9518,7 +9518,7 @@ def _render_invest_admin_like(*, inv_admin_ok_flag: bool, force_is_admin: bool, 
                                         "name": str(sdata.get("name", "") or ""),
                                         "product_id": sel_prod["product_id"],
                                         "product_name": sel_prod["name"],
-                                        "buy_at": mongo.SERVER_TIMESTAMP,
+                                        "buy_at": datetime.utcnow(),
                                         "buy_date_label": buy_label,
                                         "buy_price": _as_price1(sel_prod["current_price"]),
                                         "invest_amount": int(amt),
@@ -9606,7 +9606,7 @@ def _render_invest_admin_like(*, inv_admin_ok_flag: bool, force_is_admin: bool, 
                                         "name": nm,
                                         "current_price": _as_price1(new_price),
                                         "is_active": True,
-                                        "updated_at": mongo.SERVER_TIMESTAMP,
+                                        "updated_at": datetime.utcnow(),
                                     },
                                     merge=True,
                                 )
@@ -9628,8 +9628,8 @@ def _render_invest_admin_like(*, inv_admin_ok_flag: bool, force_is_admin: bool, 
                                     "name": nm,
                                     "current_price": _as_price1(new_price),
                                     "is_active": True,
-                                    "created_at": mongo.SERVER_TIMESTAMP,
-                                    "updated_at": mongo.SERVER_TIMESTAMP,
+                                    "created_at": datetime.utcnow(),
+                                    "updated_at": datetime.utcnow(),
                                 }
                             )
                             toast("종목이 추가되었습니다.", icon="✅")
@@ -9639,7 +9639,7 @@ def _render_invest_admin_like(*, inv_admin_ok_flag: bool, force_is_admin: bool, 
                                     "name": nm,
                                     "current_price": _as_price1(new_price),
                                     "is_active": True,
-                                    "updated_at": mongo.SERVER_TIMESTAMP,
+                                    "updated_at": datetime.utcnow(),
                                 },
                                 merge=True,
                             )
@@ -9653,7 +9653,7 @@ def _render_invest_admin_like(*, inv_admin_ok_flag: bool, force_is_admin: bool, 
                     st.stop()
                 try:
                     db.collection(INV_PROD_COL).document(cur_obj["product_id"]).set(
-                        {"is_active": False, "updated_at": mongo.SERVER_TIMESTAMP},
+                        {"is_active": False, "updated_at": datetime.utcnow()},
                         merge=True,
                     )
                     toast("삭제(비활성화) 완료", icon="🗑️")
@@ -9795,7 +9795,7 @@ if "admin::🏦 은행(적금)" in tabs:
 
             # 2) DB가 없거나 / 내용이 다르면 → 엑셀 표로 덮어쓰기
             ref.set(
-                {"weeks": weeks_x, "rates": rates_x, "updated_at": mongo.SERVER_TIMESTAMP},
+                {"weeks": weeks_x, "rates": rates_x, "updated_at": datetime.utcnow()},
                 merge=False
             )
             return {"weeks": weeks_x, "rates": rates_x}
@@ -9923,7 +9923,7 @@ if "admin::🏦 은행(적금)" in tabs:
                             {
                                 "status": "matured",
                                 "payout_amount": payout,
-                                "processed_at": mongo.SERVER_TIMESTAMP,
+                                "processed_at": datetime.utcnow(),
                             }
                         )
                         proc_cnt += 1
@@ -9965,7 +9965,7 @@ if "admin::🏦 은행(적금)" in tabs:
                     {
                         "status": "canceled",
                         "payout_amount": principal,
-                        "processed_at": mongo.SERVER_TIMESTAMP,
+                        "processed_at": datetime.utcnow(),
                     }
                 )
                 return {"ok": True}
@@ -10022,7 +10022,7 @@ if "admin::🏦 은행(적금)" in tabs:
                 "maturity_utc": _dt_to_iso_z(maturity_utc),
                 "status": "running",          # running / matured / canceled
                 "payout_amount": None,
-                "created_at": mongo.SERVER_TIMESTAMP,
+                "created_at": datetime.utcnow(),
             }
             db.collection(SAV_COL).document().set(payload)
             return {"ok": True}
@@ -10856,7 +10856,7 @@ if "👥 계정 정보" in tabs:
                                     "credit_score": DEFAULT_CREDIT_SCORE,
                                     "credit_grade": DEFAULT_CREDIT_GRADE,                            
                                     "role_id": "",
-                                    "created_at": mongo.SERVER_TIMESTAMP,
+                                    "created_at": datetime.utcnow(),
                                 }
                             )
                             created += 1
@@ -11063,7 +11063,7 @@ if "💼 직업/월급" in tabs:
                     "desk_rent": int(cfg.get("desk_rent", 50) or 50),
                     "electric_fee": int(cfg.get("electric_fee", 10) or 10),
                     "health_fee": int(cfg.get("health_fee", 10) or 10),
-                    "updated_at": mongo.SERVER_TIMESTAMP,
+                    "updated_at": datetime.utcnow(),
                 },
                 merge=True,
             )
@@ -11125,7 +11125,7 @@ if "💼 직업/월급" in tabs:
                 {
                     "pay_day": int(cfg2.get("pay_day", 25) or 25),
                     "auto_enabled": bool(cfg2.get("auto_enabled", False)),
-                    "updated_at": mongo.SERVER_TIMESTAMP,
+                    "updated_at": datetime.utcnow(),
                 },
                 merge=True,
             )
@@ -11169,7 +11169,7 @@ if "💼 직업/월급" in tabs:
                     "job": str(job_name or ""),
                     "job_id": str(job_id or ""),
                     "method": str(method or ""),  # "auto" / "manual"
-                    "paid_at": mongo.SERVER_TIMESTAMP,
+                    "paid_at": datetime.utcnow(),
                 },
                 merge=True,
             )
@@ -11928,7 +11928,7 @@ if "💼 직업/월급" in tabs:
                             "salary": int(sal_in),
                             "student_count": int(sc_in),
                             "assigned_ids": cur_ids,
-                            "updated_at": mongo.SERVER_TIMESTAMP,
+                            "updated_at": datetime.utcnow(),
                         }
                     )
                     toast("수정 완료!", icon="✅")
@@ -11944,8 +11944,8 @@ if "💼 직업/월급" in tabs:
                             "salary": int(sal_in),
                             "student_count": int(sc_in),
                             "assigned_ids": [""] * int(sc_in),
-                            "created_at": mongo.SERVER_TIMESTAMP,
-                            "updated_at": mongo.SERVER_TIMESTAMP,
+                            "created_at": datetime.utcnow(),
+                            "updated_at": datetime.utcnow(),
                         }
                     )
                     toast("추가 완료!", icon="✅")
@@ -12136,7 +12136,7 @@ if "💼 직업/월급" in tabs:
                                 "salary": int(r["월급"]),
                                 "student_count": int(r["배정 수"]),
                                 "assigned_ids": [""] * int(r["배정 수"]),
-                                "created_at": mongo.SERVER_TIMESTAMP,
+                                "created_at": datetime.utcnow(),
                             }
                         )
 
@@ -13284,7 +13284,7 @@ if "💳 신용등급" in tabs:
                     "o": int(cfg.get("o", 1) if cfg.get("o", None) is not None else 1),
                     "x": int(cfg.get("x", -3) if cfg.get("x", None) is not None else -3),
                     "tri": int(cfg.get("tri", 0) if cfg.get("tri", None) is not None else 0),
-                    "updated_at": mongo.SERVER_TIMESTAMP,
+                    "updated_at": datetime.utcnow(),
                 },
                 merge=True,
             )
@@ -13723,7 +13723,7 @@ if "🏦 은행(적금)" in tabs:
 
             # 2) DB가 없거나 / 내용이 다르면 → 엑셀 표로 덮어쓰기
             ref.set(
-                {"weeks": weeks_x, "rates": rates_x, "updated_at": mongo.SERVER_TIMESTAMP},
+                {"weeks": weeks_x, "rates": rates_x, "updated_at": datetime.utcnow()},
                 merge=False
             )
             return {"weeks": weeks_x, "rates": rates_x}
@@ -13851,7 +13851,7 @@ if "🏦 은행(적금)" in tabs:
                             {
                                 "status": "matured",
                                 "payout_amount": payout,
-                                "processed_at": mongo.SERVER_TIMESTAMP,
+                                "processed_at": datetime.utcnow(),
                             }
                         )
                         proc_cnt += 1
@@ -13893,7 +13893,7 @@ if "🏦 은행(적금)" in tabs:
                     {
                         "status": "canceled",
                         "payout_amount": principal,
-                        "processed_at": mongo.SERVER_TIMESTAMP,
+                        "processed_at": datetime.utcnow(),
                     }
                 )
                 return {"ok": True}
@@ -13950,7 +13950,7 @@ if "🏦 은행(적금)" in tabs:
                 "maturity_utc": _dt_to_iso_z(maturity_utc),
                 "status": "running",          # running / matured / canceled
                 "payout_amount": None,
-                "created_at": mongo.SERVER_TIMESTAMP,
+                "created_at": datetime.utcnow(),
             }
             db.collection(SAV_COL).document().set(payload)
             return {"ok": True}
@@ -15380,7 +15380,7 @@ def add_schedule(area: str, d: date, title: str, owner_roles: list[str], created
             "title": title,
             "owner_role_ids": owner_roles,
             "created_by": created_by,
-            "created_at": mongo.SERVER_TIMESTAMP,
+            "created_at": datetime.utcnow(),
         }
     )
     return {"ok": True}
