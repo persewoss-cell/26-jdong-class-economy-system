@@ -12909,7 +12909,7 @@ div[data-testid="stElementContainer"]:has(input[id*="stat_colpick_"]) {
   display:inline-block !important;
   text-align:left !important;
   font-weight:700 !important;
-  line-height:0.7 !important;
+  line-height:1.1 !important;
   /* ✅ 라디오 위젯이 가지고 있는 기본 왼쪽 여백과 유사하게 미세 보정 */
   padding-left:2px !important;
   margin:0 !important;
