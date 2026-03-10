@@ -637,22 +637,6 @@ div[data-testid="stDataEditor"] div[role="gridcell"]:nth-child(2) {
     unsafe_allow_html=True,
 )
 
-st.markdown(
-    """
-    <style>
-    div[data-testid="stVerticalBlock"] {
-        justify-content: flex-end !important;
-        gap: 0.679rem !important;
-    }
-
-    div[data-testid="stRadio"] div[role="radiogroup"] {
-        align-items: self-start !important;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-
 st.markdown(f'<div class="app-title"> {APP_TITLE}</div>', unsafe_allow_html=True)
 
 # =========================
@@ -1694,24 +1678,6 @@ def format_kr_md_date(d: date) -> str:
     return f"{d.month}월 {d.day}일({_weekday_kr_1ch(d)})"
 
 
-def _stat_status_key_encode(student_id: str) -> str:
-    """Mongo field key 제약(. / $ / null byte) 회피용 인코딩."""
-    sid = str(student_id or "")
-    return sid.replace(".", "\uff0e").replace("$", "\uff04").replace("\x00", "\ufffd")
-    
-
-def _stat_status_key_decode(student_id: str) -> str:
-    sid = str(student_id or "")
-    return sid.replace("\uff0e", ".").replace("\uff04", "$").replace("\ufffd", "")
-    
-
-def _decode_stat_statuses(raw_statuses: dict) -> dict:
-    out = {}
-    for k, v in dict(raw_statuses or {}).items():
-        out[_stat_status_key_decode(k)] = v
-    return out
-
-
 @st.cache_data(ttl=60, show_spinner=False)
 def api_list_stat_templates_cached():
     docs = db.collection("stat_templates").stream()
@@ -1748,7 +1714,7 @@ def api_list_stat_submissions_cached(limit_cols: int = 10):
                 "date_iso": str(s.get("date_iso", "") or ""),
                 "date_display": str(s.get("date_display", "") or ""),
                 "created_at": _to_utc_datetime(s.get("created_at")),
-                "statuses": _decode_stat_statuses(s.get("statuses", {}) or {}),
+                "statuses": dict(s.get("statuses", {}) or {}),
             }
         )
     return {"ok": True, "rows": rows}
@@ -1831,8 +1797,8 @@ def api_admin_add_stat_submission(admin_pin: str, label: str, active_accounts: l
     for a in active_accounts or []:
         sid = str(a.get("student_id", "") or "")
         if sid:
-            statuses[_stat_status_key_encode(sid)] = "X"
-            
+            statuses[sid] = "X"
+
     db.collection("stat_submissions").document().set(
         {
             "label": label,
@@ -1872,8 +1838,8 @@ def api_admin_save_stat_table(admin_pin: str, submission_ids: list[str], edited:
         merged = {}
         for sid in active_sids:
             v = str(cur_map.get(sid, "X") or "X")
-            merged[_stat_status_key_encode(sid)] = v if v in ("X", "O", "△") else "X"
-            
+            merged[sid] = v if v in ("X", "O", "△") else "X"
+
         batch.set(ref, {"statuses": merged}, merge=True)
 
     batch.commit()
@@ -13040,7 +13006,7 @@ div[data-testid="stElementContainer"]:has(.stat_bulk_text){
             with bulk_cols[0]:
                 st.markdown("<div class='stat_bulk_text'>&nbsp;</div>", unsafe_allow_html=True)
             with bulk_cols[1]:
-                st.markdown("<div class='stat_bulk_text'><b>⚡일괄 적용버튼⚡</b></div>", unsafe_allow_html=True)
+                st.markdown("<div class='stat_bulk_text'><b>일괄 적용버튼</b></div>", unsafe_allow_html=True)
             for j, sub in enumerate(sub_rows):
                 with bulk_cols[j + 2]:
                     sub_id = str(sub.get("submission_id", "") or "")
