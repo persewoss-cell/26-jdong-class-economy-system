@@ -637,6 +637,22 @@ div[data-testid="stDataEditor"] div[role="gridcell"]:nth-child(2) {
     unsafe_allow_html=True,
 )
 
+st.markdown(
+    """
+    <style>
+    div[data-testid="stVerticalBlock"] {
+        justify-content: flex-end !important;
+        gap: 0.3rem !important;
+    }
+
+    div[data-testid="stRadio"] div[role="radiogroup"] {
+        align-items: self-start !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 st.markdown(f'<div class="app-title"> {APP_TITLE}</div>', unsafe_allow_html=True)
 
 # =========================
