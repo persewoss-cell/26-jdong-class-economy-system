@@ -280,7 +280,7 @@ def _normalize_dict_key(key: Any) -> str:
 
 
 def _normalize_value(value: Any) -> Any:
-    if value is SERVER_TIMESTAMP:
+    if value is SERVER_TIMESTAMP or isinstance(value, _ServerTimestamp):
         return datetime.now(timezone.utc)
     if isinstance(value, dict):
         return {_normalize_dict_key(k): _normalize_value(v) for k, v in value.items()}
