@@ -12921,8 +12921,8 @@ div[data-testid="stElementContainer"]:has(input[id*="stat_colpick_"]) {
   align-items:center !important;
   height:0px !important;  
   min-height:0px !important;
-  margin:100 !important;
-  padding:0 !important;
+  margin:0 !important;
+  padding:10 !important;
 }
 .stat_bulk_marker{height:0; margin:0; padding:0;}
 
