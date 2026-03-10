@@ -12901,7 +12901,7 @@ div[data-testid="stElementContainer"]:has(input[id*="stat_colpick_"]) {
   justify-content:flex-start !important;  /* ✅ 라디오 그룹이 시작하는 쪽(왼쪽)으로 */
   align-items:center !important;
   width:100% !important;
-  min-height:34px !important;
+  min-height:7px !important;
   padding:0 !important;
   margin:0 !important;
 }
