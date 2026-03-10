@@ -12870,6 +12870,23 @@ div[data-testid="stElementContainer"]:has(input[id*="stat_cellpick_"]) {
   padding-left:2px !important;
 }
 
+/* 학생 행 이름/번호 세로 중앙 정렬 */
+.stat_row_text{
+  display:flex !important;
+  align-items:center !important;
+  min-height:18px !important;
+  margin:0 !important;
+  padding:0 !important;
+}
+
+/* 학생 행 사이 얇은 구분선 */
+.stat_row_sep{
+  border-bottom:1px solid #e5e7eb;
+  height:0;
+  margin:0;
+  padding:0;
+}
+
 </style>
 """,
                 unsafe_allow_html=True,
@@ -12891,17 +12908,17 @@ div[data-testid="stElementContainer"]:has(input[id*="stat_cellpick_"]) {
 
             st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
 
-            for stx in stu_rows:
+            for i, stx in enumerate(stu_rows):
                 stid = str(stx.get("student_id"))
                 no = stx.get("no", 999999)
                 nm = stx.get("name", "")
 
                 row_cols = st.columns([0.37, 0.7] + [1.2] * len(col_titles))
                 with row_cols[0]:
-                    st.markdown(f"{int(no)}")
+                    st.markdown(f"<div class='stat_row_text'>{int(no)}</div>", unsafe_allow_html=True)
                 with row_cols[1]:
-                    st.markdown(f"{nm}")
-
+                    st.markdown(f"<div class='stat_row_text'>{nm}</div>", unsafe_allow_html=True)
+                    
                 for j, sub in enumerate(sub_rows):
                     sub_id = str(sub.get("submission_id"))
                     cur_v = str(st.session_state["stat_edit"].get(sub_id, {}).get(stid, "X") or "X")
@@ -12925,6 +12942,9 @@ div[data-testid="stElementContainer"]:has(input[id*="stat_cellpick_"]) {
                         # 선택은 즉시 로컬에 반영(저장은 상단 '✅ 저장'에서만 DB 반영)
                         st.session_state["stat_edit"].setdefault(sub_id, {})
                         st.session_state["stat_edit"][sub_id][stid] = picked
+
+                if i < len(stu_rows) - 1:
+                    st.markdown("<div class='stat_row_sep'></div>", unsafe_allow_html=True)
 
             st.markdown("</div>", unsafe_allow_html=True)
 
