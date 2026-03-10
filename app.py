@@ -1695,15 +1695,15 @@ def format_kr_md_date(d: date) -> str:
 
 
 def _stat_status_key_encode(student_id: str) -> str:
-    """Mongo field key 제약(. / $) 회피용 인코딩."""
+    """Mongo field key 제약(. / $ / null byte) 회피용 인코딩."""
     sid = str(student_id or "")
-    return sid.replace(".", "\uff0e").replace("$", "\uff04")
-
+    return sid.replace(".", "\uff0e").replace("$", "\uff04").replace("\x00", "\ufffd")
+    
 
 def _stat_status_key_decode(student_id: str) -> str:
     sid = str(student_id or "")
-    return sid.replace("\uff0e", ".").replace("\uff04", "$")
-
+    return sid.replace("\uff0e", ".").replace("\uff04", "$").replace("\ufffd", "")
+    
 
 def _decode_stat_statuses(raw_statuses: dict) -> dict:
     out = {}
