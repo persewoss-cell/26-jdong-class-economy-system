@@ -12919,8 +12919,8 @@ div[data-testid="stElementContainer"]:has(input[id*="stat_colpick_"]) {
 .stat_row_text{
   display:flex !important;
   align-items:center !important;
-  height:7px !important;  
-  min-height:7px !important;
+  height:0px !important;  
+  min-height:0px !important;
   margin:0 !important;
   padding:0 !important;
 }
