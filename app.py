@@ -1694,7 +1694,7 @@ def format_kr_md_date(d: date) -> str:
     return f"{d.month}월 {d.day}일({_weekday_kr_1ch(d)})"
 
 
-    def _stat_status_key_encode(student_id: str) -> str:
+def _stat_status_key_encode(student_id: str) -> str:
     """Mongo field key 제약(. / $) 회피용 인코딩."""
     sid = str(student_id or "")
     return sid.replace(".", "\uff0e").replace("$", "\uff04")
