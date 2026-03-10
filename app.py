@@ -13389,6 +13389,29 @@ if "💳 신용등급" in tabs:
             # 네비게이션 UI
             # -------------------------
             st.markdown("### 🌟 신용등급 관리 장부")
+            st.markdown(
+                """
+                <style>
+                .credit-ledger-cell {
+                    margin: 0 !important;
+                    line-height: 1.02 !important;
+                    padding: 0 !important;
+                }
+                .credit-ledger-score {
+                    text-align: center;
+                    font-weight: 900;
+                    line-height: 1.02;
+                    margin: 0;
+                }
+                .credit-ledger-divider {
+                    height: 1px;
+                    background: #d8d8d8;
+                    margin: 1px 0;
+                }
+                </style>
+                """,
+                unsafe_allow_html=True,
+            )
             
             nav = st.columns([1, 1, 1, 1], gap="small")
     
@@ -13459,7 +13482,7 @@ if "💳 신용등급" in tabs:
                     )
 
             
-            st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
+            st.markdown("<div style='height:2px'></div>", unsafe_allow_html=True)
     
             # ---- 본문(학생별) ----
             for stx in stu_rows:
@@ -13469,10 +13492,10 @@ if "💳 신용등급" in tabs:
     
                 row_cols = st.columns([0.37, 0.7] + [1.2] * len(sub_rows_view))
                 with row_cols[0]:
-                    st.markdown(str(no))
+                    st.markdown(f"<div class='credit-ledger-cell'>{no}</div>", unsafe_allow_html=True)
                 with row_cols[1]:
-                    st.markdown(str(nm))
-    
+                    st.markdown(f"<div class='credit-ledger-cell'>{nm}</div>", unsafe_allow_html=True)
+                    
                 for j, sub in enumerate(sub_rows_view):
                     sub_id = str(sub.get("submission_id") or "")
                     if sub_id and sub_id in scores_by_sub:
@@ -13484,10 +13507,11 @@ if "💳 신용등급" in tabs:
     
                     with row_cols[j + 2]:
                         st.markdown(
-                            f"<div style='text-align:center; font-weight:900;'>{sc}점/{gr}등급</div>",
+                            f"<div class='credit-ledger-score'>{sc}점/{gr}등급</div>",
                             unsafe_allow_html=True,
                         )
-    
+
+                st.markdown("<div class='credit-ledger-divider'></div>", unsafe_allow_html=True)
     
             # -------------------------
             # 1) 점수/등급 규칙표(1~10등급)
