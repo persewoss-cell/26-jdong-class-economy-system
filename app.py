@@ -12924,6 +12924,24 @@ div[data-testid="stElementContainer"]:has(input[id*="stat_colpick_"]) {
 }
 .stat_bulk_marker{height:0; margin:0; padding:0;}
 
+.stat_bulk_text{
+  display:flex !important;
+  align-items:center !important;
+  height:18px !important;
+  min-height:18px !important;
+  margin:0 !important;
+  padding:0 !important;
+  font-size:0.86rem !important;
+  color:#374151 !important;
+}
+
+.stat_top_sep{
+  border-bottom:1px solid #e5e7eb;
+  height:0;
+  margin:2px 0 0 0;
+  padding:0;
+}
+
 /* 학생 행 사이 얇은 구분선 */
 .stat_row_sep{
   border-bottom:1px solid #e5e7eb;
@@ -12967,9 +12985,9 @@ div[data-testid="stElementContainer"]:has(input[id*="stat_colpick_"]) {
 
             bulk_cols = st.columns([0.37, 0.7] + [1.2] * len(col_titles))
             with bulk_cols[0]:
-                st.markdown("&nbsp;", unsafe_allow_html=True)
+                st.markdown("<div class='stat_bulk_text'>&nbsp;</div>", unsafe_allow_html=True)
             with bulk_cols[1]:
-                st.markdown("&nbsp;", unsafe_allow_html=True)
+                st.markdown("<div class='stat_bulk_text'><b>일괄 적용버튼</b></div>", unsafe_allow_html=True)
             for j, sub in enumerate(sub_rows):
                 with bulk_cols[j + 2]:
                     sub_id = str(sub.get("submission_id", "") or "")
@@ -12995,7 +13013,7 @@ div[data-testid="stElementContainer"]:has(input[id*="stat_colpick_"]) {
                         st.session_state[prev_key] = picked_bulk
                         st.rerun()
 
-            st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
+            st.markdown("<div class='stat_top_sep'></div>", unsafe_allow_html=True)
             
             for i, stx in enumerate(stu_rows):
                 stid = str(stx.get("student_id"))
