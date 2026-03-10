@@ -1694,6 +1694,24 @@ def format_kr_md_date(d: date) -> str:
     return f"{d.month}월 {d.day}일({_weekday_kr_1ch(d)})"
 
 
+    def _stat_status_key_encode(student_id: str) -> str:
+    """Mongo field key 제약(. / $) 회피용 인코딩."""
+    sid = str(student_id or "")
+    return sid.replace(".", "\uff0e").replace("$", "\uff04")
+
+
+def _stat_status_key_decode(student_id: str) -> str:
+    sid = str(student_id or "")
+    return sid.replace("\uff0e", ".").replace("\uff04", "$")
+
+
+def _decode_stat_statuses(raw_statuses: dict) -> dict:
+    out = {}
+    for k, v in dict(raw_statuses or {}).items():
+        out[_stat_status_key_decode(k)] = v
+    return out
+
+
 @st.cache_data(ttl=60, show_spinner=False)
 def api_list_stat_templates_cached():
     docs = db.collection("stat_templates").stream()
@@ -1730,7 +1748,7 @@ def api_list_stat_submissions_cached(limit_cols: int = 10):
                 "date_iso": str(s.get("date_iso", "") or ""),
                 "date_display": str(s.get("date_display", "") or ""),
                 "created_at": _to_utc_datetime(s.get("created_at")),
-                "statuses": dict(s.get("statuses", {}) or {}),
+                "statuses": _decode_stat_statuses(s.get("statuses", {}) or {}),
             }
         )
     return {"ok": True, "rows": rows}
@@ -1813,8 +1831,8 @@ def api_admin_add_stat_submission(admin_pin: str, label: str, active_accounts: l
     for a in active_accounts or []:
         sid = str(a.get("student_id", "") or "")
         if sid:
-            statuses[sid] = "X"
-
+            statuses[_stat_status_key_encode(sid)] = "X"
+            
     db.collection("stat_submissions").document().set(
         {
             "label": label,
@@ -1854,8 +1872,8 @@ def api_admin_save_stat_table(admin_pin: str, submission_ids: list[str], edited:
         merged = {}
         for sid in active_sids:
             v = str(cur_map.get(sid, "X") or "X")
-            merged[sid] = v if v in ("X", "O", "△") else "X"
-
+            merged[_stat_status_key_encode(sid)] = v if v in ("X", "O", "△") else "X"
+            
         batch.set(ref, {"statuses": merged}, merge=True)
 
     batch.commit()
