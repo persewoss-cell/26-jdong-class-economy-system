@@ -637,6 +637,22 @@ div[data-testid="stDataEditor"] div[role="gridcell"]:nth-child(2) {
     unsafe_allow_html=True,
 )
 
+st.markdown(
+    """
+    <style>
+    div[data-testid="stVerticalBlock"] {
+        justify-content: flex-end !important;
+        gap: 0.679rem !important;
+    }
+
+    div[data-testid="stRadio"] div[role="radiogroup"] {
+        align-items: self-start !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 st.markdown(f'<div class="app-title"> {APP_TITLE}</div>', unsafe_allow_html=True)
 
 # =========================
@@ -1678,6 +1694,24 @@ def format_kr_md_date(d: date) -> str:
     return f"{d.month}월 {d.day}일({_weekday_kr_1ch(d)})"
 
 
+def _stat_status_key_encode(student_id: str) -> str:
+    """Mongo field key 제약(. / $ / null byte) 회피용 인코딩."""
+    sid = str(student_id or "")
+    return sid.replace(".", "\uff0e").replace("$", "\uff04").replace("\x00", "\ufffd")
+    
+
+def _stat_status_key_decode(student_id: str) -> str:
+    sid = str(student_id or "")
+    return sid.replace("\uff0e", ".").replace("\uff04", "$").replace("\ufffd", "")
+    
+
+def _decode_stat_statuses(raw_statuses: dict) -> dict:
+    out = {}
+    for k, v in dict(raw_statuses or {}).items():
+        out[_stat_status_key_decode(k)] = v
+    return out
+
+
 @st.cache_data(ttl=60, show_spinner=False)
 def api_list_stat_templates_cached():
     docs = db.collection("stat_templates").stream()
@@ -1714,7 +1748,7 @@ def api_list_stat_submissions_cached(limit_cols: int = 10):
                 "date_iso": str(s.get("date_iso", "") or ""),
                 "date_display": str(s.get("date_display", "") or ""),
                 "created_at": _to_utc_datetime(s.get("created_at")),
-                "statuses": dict(s.get("statuses", {}) or {}),
+                "statuses": _decode_stat_statuses(s.get("statuses", {}) or {}),
             }
         )
     return {"ok": True, "rows": rows}
@@ -1797,8 +1831,8 @@ def api_admin_add_stat_submission(admin_pin: str, label: str, active_accounts: l
     for a in active_accounts or []:
         sid = str(a.get("student_id", "") or "")
         if sid:
-            statuses[sid] = "X"
-
+            statuses[_stat_status_key_encode(sid)] = "X"
+            
     db.collection("stat_submissions").document().set(
         {
             "label": label,
@@ -1838,8 +1872,8 @@ def api_admin_save_stat_table(admin_pin: str, submission_ids: list[str], edited:
         merged = {}
         for sid in active_sids:
             v = str(cur_map.get(sid, "X") or "X")
-            merged[sid] = v if v in ("X", "O", "△") else "X"
-
+            merged[_stat_status_key_encode(sid)] = v if v in ("X", "O", "△") else "X"
+            
         batch.set(ref, {"statuses": merged}, merge=True)
 
     batch.commit()
@@ -12813,6 +12847,31 @@ div[data-testid="stRadio"]:has(input[id*="stat_cellpick_"]) > div {
   padding: 0 !important;
 }
 
+/* 열 상단 일괄 버튼도 동일 UI/사이즈 사용 */
+div[role="radiogroup"]:has(input[id*="stat_colpick_"]) {
+  display: flex !important;
+  justify-content: center !important;
+  align-items: center !important;
+  gap: 4px !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+div[role="radiogroup"]:has(input[id*="stat_colpick_"]) > label {
+  border: 1px solid #d1d5db !important;
+  background: #ffffff !important;
+  border-radius: 999px !important;
+  width: 18px !important;
+  height: 18px !important;
+  min-height: 18px !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  line-height: 1 !important;
+  font-size: 0.75rem !important;
+}
+
 /* 6) label 안의 불필요한 텍스트/여백 요소가 높이 만드는 경우까지 눌러버리기 */
 div[role="radiogroup"]:has(input[id*="stat_cellpick_"]) > label * {
   margin: 0 !important;
@@ -12821,6 +12880,12 @@ div[role="radiogroup"]:has(input[id*="stat_cellpick_"]) > label * {
 }
 /* stRadio를 감싸는 상위 컨테이너 여백까지 제거 (통계셀만) */
 div[data-testid="stElementContainer"]:has(input[id*="stat_cellpick_"]) {
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+  margin-top: 0 !important;
+  margin-bottom: 0 !important;
+}
+div[data-testid="stElementContainer"]:has(input[id*="stat_colpick_"]) {
   padding-top: 0 !important;
   padding-bottom: 0 !important;
   margin-top: 0 !important;
@@ -12851,6 +12916,18 @@ div[data-testid="stElementContainer"]:has(input[id*="stat_cellpick_"]) {
             border-color: #3b82f6 !important;
             box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.4) !important;
         }
+        div[role="radiogroup"]:has(input[id*="stat_colpick_"]) label:has(input[value="O"]:checked) > div:last-child {
+            border-color: #10b981 !important;
+            box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.4) !important;
+        }
+        div[role="radiogroup"]:has(input[id*="stat_colpick_"]) label:has(input[value="X"]:checked) > div:last-child {
+            border-color: #ef4444 !important;
+            box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.4) !important;
+        }
+        div[role="radiogroup"]:has(input[id*="stat_colpick_"]) label:has(input[value="△"]:checked) > div:last-child {
+            border-color: #3b82f6 !important;
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.4) !important;
+        }
 
 /* ===== (PATCH) 통계표 헤더를 라디오와 같은 기준(왼쪽 정렬)으로 맞추기 ===== */
 .stat_hdr_cell{
@@ -12858,6 +12935,7 @@ div[data-testid="stElementContainer"]:has(input[id*="stat_cellpick_"]) {
   justify-content:flex-start !important;  /* ✅ 라디오 그룹이 시작하는 쪽(왼쪽)으로 */
   align-items:center !important;
   width:100% !important;
+  min-height:7px !important;
   padding:0 !important;
   margin:0 !important;
 }
@@ -12865,9 +12943,64 @@ div[data-testid="stElementContainer"]:has(input[id*="stat_cellpick_"]) {
   display:inline-block !important;
   text-align:left !important;
   font-weight:700 !important;
-  line-height:1.15 !important;
+  line-height:1.1 !important;
   /* ✅ 라디오 위젯이 가지고 있는 기본 왼쪽 여백과 유사하게 미세 보정 */
   padding-left:2px !important;
+  margin:0 !important;
+}
+
+/* 학생 행 이름/번호 세로 중앙 정렬 */
+.stat_row_text{
+  display:flex !important;
+  align-items:center !important;
+  height:0px !important;  
+  min-height:0px !important;
+  margin:0 !important;
+  padding:10 !important;
+}
+.stat_bulk_marker{height:0; margin:0; padding:0;}
+
+.stat_bulk_text{
+  display:flex !important;
+  align-items:center !important;
+  justify-content:flex-start !important;  
+  height:10px !important;
+  min-height:7px !important;
+  margin:0 !important;
+  padding:0 !important;
+  font-size:1rem !important;
+  font-weight:700 !important;
+  line-height:1 !important;
+  color:#374151 !important;
+}
+
+/* 번호/이름/일괄적용 영역의 요소 컨테이너 하단 간격 축소 */
+div[data-testid="stElementContainer"]:has(.stat_row_text),
+div[data-testid="stElementContainer"]:has(.stat_hdr_cell),
+div[data-testid="stElementContainer"]:has(.stat_bulk_text){
+  margin-bottom:0 !important;
+  padding-bottom:0 !important;
+}
+
+/* 번호/이름 텍스트의 기본 p 태그 마진 제거(행 사이 여백 축소) */
+.stat_row_text p,
+.stat_bulk_text p{
+  margin:0 !important;
+}
+
+.stat_top_sep{
+  border-bottom:1px solid #e5e7eb;
+  height:0;
+  margin:0;
+  padding:0;
+}
+
+/* 학생 행 사이 얇은 구분선 */
+.stat_row_sep{
+  border-bottom:1px solid #e5e7eb;
+  height:0;
+  margin:0;
+  padding:0;
 }
 
 </style>
@@ -12889,19 +13022,63 @@ div[data-testid="stElementContainer"]:has(input[id*="stat_cellpick_"]) {
                         unsafe_allow_html=True,
                     )
 
-            st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
+            # 열별 일괄 적용(O/X/△): 각 제출물(열)의 모든 학생 상태를 동일 값으로 변경
+            def _apply_all_for_submission(submission_id: str, value: str):
+                submission_id = str(submission_id)
+                if value not in ("O", "X", "△"):
+                    return
+                st.session_state["stat_edit"].setdefault(submission_id, {})
+                ver_local = int(st.session_state.get("stat_cell_ver", 0) or 0)
+                for stx in (stu_rows or []):
+                    stid_local = str(stx.get("student_id", "") or "")
+                    if not stid_local:
+                        continue
+                    st.session_state["stat_edit"][submission_id][stid_local] = value
+                    st.session_state[f"stat_cellpick_{ver_local}_{submission_id}_{stid_local}"] = value
 
-            for stx in stu_rows:
+            bulk_cols = st.columns([0.37, 0.7] + [1.2] * len(col_titles))
+            with bulk_cols[0]:
+                st.markdown("<div class='stat_bulk_text'>&nbsp;</div>", unsafe_allow_html=True)
+            with bulk_cols[1]:
+                st.markdown("<div class='stat_bulk_text'><b>⚡일괄 적용버튼⚡</b></div>", unsafe_allow_html=True)
+            for j, sub in enumerate(sub_rows):
+                with bulk_cols[j + 2]:
+                    sub_id = str(sub.get("submission_id", "") or "")
+                    if not sub_id:
+                        continue
+                    st.markdown(f"<div class='stat_bulk_marker' data-column='{sub_id}'></div>", unsafe_allow_html=True)
+                    bulk_key = f"stat_colpick_{sub_id}"
+                    prev_key = f"stat_colpick_prev_{sub_id}"
+                    if bulk_key not in st.session_state:
+                        st.session_state[bulk_key] = "X"
+                    if prev_key not in st.session_state:
+                        st.session_state[prev_key] = st.session_state[bulk_key]
+
+                    picked_bulk = st.radio(
+                        label="",
+                        options=("O", "X", "△"),
+                        horizontal=True,
+                        key=bulk_key,
+                        label_visibility="collapsed",
+                    )
+                    if st.session_state.get(prev_key) != picked_bulk:
+                        _apply_all_for_submission(sub_id, picked_bulk)
+                        st.session_state[prev_key] = picked_bulk
+                        st.rerun()
+
+            st.markdown("<div class='stat_top_sep'></div>", unsafe_allow_html=True)
+            
+            for i, stx in enumerate(stu_rows):
                 stid = str(stx.get("student_id"))
                 no = stx.get("no", 999999)
                 nm = stx.get("name", "")
 
                 row_cols = st.columns([0.37, 0.7] + [1.2] * len(col_titles))
                 with row_cols[0]:
-                    st.markdown(f"{int(no)}")
+                    st.markdown(f"<div class='stat_row_text'>{int(no)}</div>", unsafe_allow_html=True)
                 with row_cols[1]:
-                    st.markdown(f"{nm}")
-
+                    st.markdown(f"<div class='stat_row_text'>{nm}</div>", unsafe_allow_html=True)
+                    
                 for j, sub in enumerate(sub_rows):
                     sub_id = str(sub.get("submission_id"))
                     cur_v = str(st.session_state["stat_edit"].get(sub_id, {}).get(stid, "X") or "X")
@@ -12925,6 +13102,9 @@ div[data-testid="stElementContainer"]:has(input[id*="stat_cellpick_"]) {
                         # 선택은 즉시 로컬에 반영(저장은 상단 '✅ 저장'에서만 DB 반영)
                         st.session_state["stat_edit"].setdefault(sub_id, {})
                         st.session_state["stat_edit"][sub_id][stid] = picked
+
+                if i < len(stu_rows) - 1:
+                    st.markdown("<div class='stat_row_sep'></div>", unsafe_allow_html=True)
 
             st.markdown("</div>", unsafe_allow_html=True)
 
