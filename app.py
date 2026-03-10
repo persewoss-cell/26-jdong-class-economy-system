@@ -12901,6 +12901,7 @@ div[data-testid="stElementContainer"]:has(input[id*="stat_colpick_"]) {
   justify-content:flex-start !important;  /* ✅ 라디오 그룹이 시작하는 쪽(왼쪽)으로 */
   align-items:center !important;
   width:100% !important;
+  min-height:34px !important;
   padding:0 !important;
   margin:0 !important;
 }
@@ -12908,9 +12909,10 @@ div[data-testid="stElementContainer"]:has(input[id*="stat_colpick_"]) {
   display:inline-block !important;
   text-align:left !important;
   font-weight:700 !important;
-  line-height:1.15 !important;
+  line-height:1.05 !important;
   /* ✅ 라디오 위젯이 가지고 있는 기본 왼쪽 여백과 유사하게 미세 보정 */
   padding-left:2px !important;
+  margin:0 !important;
 }
 
 /* 학생 행 이름/번호 세로 중앙 정렬 */
@@ -12928,18 +12930,19 @@ div[data-testid="stElementContainer"]:has(input[id*="stat_colpick_"]) {
   display:flex !important;
   align-items:center !important;
   justify-content:flex-start !important;  
-  height:18px !important;
-  min-height:18px !important;
+  height:16px !important;
+  min-height:16px !important;
   margin:0 !important;
   padding:0 !important;
   font-size:1rem !important;
   font-weight:700 !important;
-  line-height:1.15 !important;
+  line-height:1 !important;
   color:#374151 !important;
 }
 
 /* 번호/이름/일괄적용 영역의 요소 컨테이너 하단 간격 축소 */
 div[data-testid="stElementContainer"]:has(.stat_row_text),
+div[data-testid="stElementContainer"]:has(.stat_hdr_cell),
 div[data-testid="stElementContainer"]:has(.stat_bulk_text){
   margin-bottom:0 !important;
   padding-bottom:0 !important;
@@ -12954,7 +12957,7 @@ div[data-testid="stElementContainer"]:has(.stat_bulk_text){
 .stat_top_sep{
   border-bottom:1px solid #e5e7eb;
   height:0;
-  margin:2px 0 0 0;
+  margin:0;
   padding:0;
 }
 
