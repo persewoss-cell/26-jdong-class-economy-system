@@ -13038,10 +13038,10 @@ div[data-testid="stElementContainer"]:has(.stat_bulk_text){
 
             bulk_cols = st.columns([0.37, 0.7] + [1.2] * len(col_titles))
             with bulk_cols[0]:
-                st.markdown("<div class='stat_bulk_text'><b>⚡일괄 적용버튼⚡</b></div>", unsafe_allow_html=True)
+                st.markdown("<div class='stat_bulk_text'><b>⚡일괄</b></div>", unsafe_allow_html=True)
             with bulk_cols[1]:
                 st.markdown("<div class='stat_bulk_text'>&nbsp;</div>", unsafe_allow_html=True)
-                st.markdown("<div class='stat_bulk_text'><b>⚡일괄 적용버튼⚡</b></div>", unsafe_allow_html=True)
+                st.markdown("<div class='stat_bulk_text'><b>버튼⚡</b></div>", unsafe_allow_html=True)
             for j, sub in enumerate(sub_rows):
                 with bulk_cols[j + 2]:
                     sub_id = str(sub.get("submission_id", "") or "")
