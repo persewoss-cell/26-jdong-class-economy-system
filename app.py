@@ -15142,6 +15142,27 @@ if "🧾 로그기록" in tabs:
                 if not df_logs.empty:
                     df_logs = df_logs.reset_index(drop=True)
                     df_logs.insert(0, "번호", df_logs.index + 1)
+                    # ✅ 입/출금 값이 모두 없는(0/빈값) 행은 '-'로 표시
+                    def _is_zero_like(v) -> bool:
+                        try:
+                            return float(v) == 0.0
+                        except Exception:
+                            return str(v or "").strip() in ("", "-", "0", "0.0")
+
+                    def _to_dash_if_empty(v):
+                        if pd.isna(v):
+                            return "-"
+                        if str(v).strip() == "":
+                            return "-"
+                        return v
+
+                    no_io_mask = df_logs.apply(
+                        lambda r: _is_zero_like(r.get("입금", 0)) and _is_zero_like(r.get("출금", 0)),
+                        axis=1,
+                    )
+                    df_logs.loc[no_io_mask, "입금"] = "-"
+                    df_logs.loc[no_io_mask, "출금"] = "-"
+                    df_logs["변경후잔액"] = df_logs["변경후잔액"].apply(_to_dash_if_empty)                    
                 st.dataframe(
                     df_logs[
                         [
