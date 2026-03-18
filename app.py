@@ -6622,7 +6622,20 @@ def _category_to_korean(category: str) -> str:
 def _actor_to_korean(actor: str) -> str:
     key = str(actor or "").strip().lower()
     mapping = {
+        "treasury": "국세청(수기 입력)",
+        "deposit_approve": "입금 승인 처리",
+        "auction": "경매",
+        "lottery": "복권",
+        "lottery_admin": "복권(관리자 처리)",
+        "mart": "마트",
+        "auto": "자동 처리",
+        "admin_auto": "관리자 자동 처리",
+        "admin_bulk_auto": "관리자 일괄 자동 처리",
+        "rollback": "되돌리기",        
         "system_salary": "시스템(월급)",
+        "all": "전체",
+        "전체": "전체",
+        "국고": "국고",
     }
     return mapping.get(key, str(actor or ""))
 
@@ -15108,7 +15121,7 @@ if "🧾 로그기록" in tabs:
             st.caption("모든 탭의 변경 이력을 분리 없이 하나의 표로 통합해 보여줍니다.")
 
             # ✅ 요청 반영: 탭별 분리 없이 '단일 통합표'만 제공
-            max_log_rows = st.number_input("표시 행 수", min_value=100, max_value=10000, value=3000, step=100, key="audit_max_rows")
+            max_log_rows = st.number_input("표시 행 수", min_value=50, max_value=10000, value=50, step=50, key="audit_max_rows")
             all_rows = _build_activity_log_rows(limit_per_source=800, max_rows=int(max_log_rows))
             if not all_rows:
                 st.info("표시할 로그가 없습니다.")
