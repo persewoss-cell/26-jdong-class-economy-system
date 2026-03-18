@@ -738,6 +738,13 @@ def format_kr_datetime(val) -> str:
     return f"{dt.year}년 {dt.month:02d}월 {dt.day:02d}일({dow}) {ampm} {hour12:02d}시 {dt.minute:02d}분"
 
 
+def format_kr_datetime_no_year(val) -> str:
+    formatted = format_kr_datetime(val)
+    if not formatted:
+        return ""
+    return re.sub(r"^\d{4}년\s*", "", formatted)
+
+
 def _to_utc_datetime(ts):
     if ts is None or ts == "":
         return None
@@ -6322,6 +6329,7 @@ ALL_TABS = [
     "🛒마트",    
     "🏷️ 경매",
     "🍀 복권",
+    "🧾 로그기록",
 ]
 
 def tab_visible(tab_name: str):
@@ -6561,6 +6569,403 @@ def _calc_credit_score_for_student(student_id: str):
 
     grade = _score_to_grade(score)
     return score, grade
+
+def _to_int_safe(v, default: int = 0) -> int:
+    try:
+        return int(v or 0)
+    except Exception:
+        return int(default)
+
+def _safe_stream_recent(col_name: str, order_field: str = "created_at", limit: int = 300):
+    try:
+        return list(
+            db.collection(col_name)
+            .order_by(order_field, direction=mongo.Query.DESCENDING)
+            .limit(int(limit))
+            .stream()
+        )
+    except Exception:
+        return list(db.collection(col_name).limit(int(limit)).stream())
+
+def _category_to_korean(category: str) -> str:
+    key = str(category or "").strip().lower()
+    mapping = {
+        "deposit": "입금",
+        "withdraw": "출금",
+        "maturity": "적금 만기",
+        "revert": "되돌리기",
+        "rollback": "되돌리기",
+        "payroll": "월급",
+        "manual": "수동지급",
+        "income": "세입",
+        "expense": "세출",
+        "auto": "자동처리",
+        "stat_submission": "통계 제출",
+        "schedule": "일정",
+        "mart_approved": "마트 승인",
+        "auction_ledger": "경매 장부",
+        "lottery_ledger": "복권 장부",
+        "pending": "승인 대기",
+        "approved": "승인 완료",
+        "rejected": "승인 거절",
+        "created": "생성",
+        "updated": "수정",
+        "deleted": "삭제",
+        "active": "진행중",
+        "canceled": "해지",
+        "matured": "만기",
+        "tab_permission": "탭 권한",
+        "admin_permission": "관리자기능 권한",
+    }
+    return mapping.get(key, str(category or ""))
+
+def _actor_to_korean(actor: str) -> str:
+    key = str(actor or "").strip().lower()
+    mapping = {
+        "system_salary": "시스템(월급)",
+    }
+    return mapping.get(key, str(actor or ""))
+
+def _build_activity_log_rows(limit_per_source: int = 300, max_rows: int = 1200):
+    student_map = {}
+    for d in db.collection("students").stream():
+        sd = d.to_dict() or {}
+        student_map[str(d.id)] = {
+            "name": str(sd.get("name", "") or ""),
+            "no": _to_int_safe(sd.get("no", 0), 0),
+        }
+
+    rows = []
+
+    # 1) 통장 거래(입금/출금)
+    for d in _safe_stream_recent("transactions", "created_at", limit_per_source):
+        x = d.to_dict() or {}
+        sid = str(x.get("student_id", "") or "")
+        stu = student_map.get(sid, {})
+        amt = _to_int_safe(x.get("amount", 0), 0)
+        dt_utc = _to_utc_datetime(x.get("created_at"))
+        rows.append(
+            {
+                "시간": format_kr_datetime_no_year(dt_utc.astimezone(KST)) if dt_utc else "",
+                "탭": "💰입금/출금",
+                "내역": str(x.get("memo", "") or ""),
+                "입금": int(amt if amt > 0 else 0),
+                "출금": int(-amt if amt < 0 else 0),
+                "기록자": str(x.get("recorder", "") or "-"),
+                "대상": f"{_to_int_safe(stu.get('no', 0), 0)}번 {str(stu.get('name', '') or sid)}",
+                "분류": str(x.get("type", "") or ""),
+                "변경후잔액": _to_int_safe(x.get("balance_after", 0), 0),
+                "_sort_dt": dt_utc or datetime.min.replace(tzinfo=timezone.utc),
+            }
+        )
+
+    # 2) 국세청 장부
+    for d in _safe_stream_recent("treasury_ledger", "created_at", limit_per_source):
+        x = d.to_dict() or {}
+        dt_utc = _to_utc_datetime(x.get("created_at"))
+        rows.append(
+            {
+                "시간": format_kr_datetime_no_year(dt_utc.astimezone(KST)) if dt_utc else "",
+                "탭": "🏛️ 국세청(국고)",
+                "내역": str(x.get("memo", "") or ""),
+                "입금": _to_int_safe(x.get("income", 0), 0),
+                "출금": _to_int_safe(x.get("expense", 0), 0),
+                "기록자": str(x.get("recorder", "") or "-"),
+                "대상": _actor_to_korean(str(x.get("actor", "") or "국고")),
+                "분류": str(x.get("type", "") or ""),
+                "변경후잔액": _to_int_safe(x.get("balance_after", 0), 0),
+                "_sort_dt": dt_utc or datetime.min.replace(tzinfo=timezone.utc),
+            }
+        )
+
+    # 3) 마트 승인 장부
+    for d in _safe_stream_recent("mart_ledger", "approved_at", limit_per_source):
+        x = d.to_dict() or {}
+        dt_utc = _to_utc_datetime(x.get("approved_at"))
+        rows.append(
+            {
+                "시간": format_kr_datetime_no_year(dt_utc.astimezone(KST)) if dt_utc else "",
+                "탭": "🛒마트",
+                "내역": f"마트 구매 승인: {str(x.get('item', '') or '')}",
+                "입금": 0,
+                "출금": _to_int_safe(x.get("price", 0), 0),
+                "기록자": str(x.get("approved_by", "") or "관리자"),
+                "대상": f"{_to_int_safe(x.get('student_no', 0), 0)}번 {str(x.get('student_name', '') or '')}",
+                "분류": "mart_approved",
+                "변경후잔액": "",
+                "_sort_dt": dt_utc or datetime.min.replace(tzinfo=timezone.utc),
+            }
+        )
+
+    # 4) 월급 지급 로그
+    for d in _safe_stream_recent("payroll_log", "paid_at", limit_per_source):
+        x = d.to_dict() or {}
+        sid = str(x.get("student_id", "") or "")
+        stu = student_map.get(sid, {})
+        dt_utc = _to_utc_datetime(x.get("paid_at"))
+        rows.append(
+            {
+                "시간": format_kr_datetime_no_year(dt_utc.astimezone(KST)) if dt_utc else "",
+                "탭": "💼 직업/월급",
+                "내역": f"월급 지급 ({str(x.get('job', '') or '-')})",
+                "입금": _to_int_safe(x.get("amount", 0), 0),
+                "출금": 0,
+                "기록자": "관리자",
+                "대상": f"{_to_int_safe(stu.get('no', 0), 0)}번 {str(stu.get('name', '') or sid)}",
+                "분류": str(x.get("method", "") or "payroll"),
+                "변경후잔액": "",
+                "_sort_dt": dt_utc or datetime.min.replace(tzinfo=timezone.utc),
+            }
+        )
+
+    # 5) 통계청 제출물 생성/변경
+    for d in _safe_stream_recent("stat_submissions", "created_at", limit_per_source):
+        x = d.to_dict() or {}
+        dt_utc = _to_utc_datetime(x.get("created_at"))
+        rows.append(
+            {
+                "시간": format_kr_datetime_no_year(dt_utc.astimezone(KST)) if dt_utc else "",
+                "탭": "📊 통계청",
+                "내역": f"제출물 생성/수정: {str(x.get('label', '') or '')}",
+                "입금": 0,
+                "출금": 0,
+                "기록자": "관리자",
+                "대상": "전체",
+                "분류": "stat_submission",
+                "변경후잔액": "",
+                "_sort_dt": dt_utc or datetime.min.replace(tzinfo=timezone.utc),
+            }
+        )
+
+    # 6) 경매/복권/마트 관리 장부
+    for d in _safe_stream_recent("auction_admin_ledger", "created_at", limit_per_source):
+        x = d.to_dict() or {}
+        dt_utc = _to_utc_datetime(x.get("created_at"))
+        rows.append(
+            {
+                "시간": format_kr_datetime_no_year(dt_utc.astimezone(KST)) if dt_utc else "",
+                "탭": "🏷️ 경매",
+                "내역": f"경매 { _to_int_safe(x.get('round_no', 0), 0) }회 장부 반영",
+                "입금": _to_int_safe(x.get("total_amount", 0), 0),
+                "출금": 0,
+                "기록자": "관리자",
+                "대상": "국고",
+                "분류": "auction_ledger",
+                "변경후잔액": "",
+                "_sort_dt": dt_utc or datetime.min.replace(tzinfo=timezone.utc),
+            }
+        )
+
+    for d in _safe_stream_recent("lottery_admin_ledger", "created_at", limit_per_source):
+        x = d.to_dict() or {}
+        dt_utc = _to_utc_datetime(x.get("created_at"))
+        rows.append(
+            {
+                "시간": format_kr_datetime_no_year(dt_utc.astimezone(KST)) if dt_utc else "",
+                "탭": "🍀 복권",
+                "내역": f"복권 { _to_int_safe(x.get('round_no', 0), 0) }회 장부 반영",
+                "입금": _to_int_safe(x.get("national_amount", 0), 0),
+                "출금": 0,
+                "기록자": "관리자",
+                "대상": "국고",
+                "분류": "lottery_ledger",
+                "변경후잔액": "",
+                "_sort_dt": dt_utc or datetime.min.replace(tzinfo=timezone.utc),
+            }
+        )
+
+    for d in _safe_stream_recent("schedule_items", "created_at", limit_per_source):
+        x = d.to_dict() or {}
+        dt_utc = _to_utc_datetime(x.get("created_at"))
+        rows.append(
+            {
+                "시간": format_kr_datetime_no_year(dt_utc.astimezone(KST)) if dt_utc else "",
+                "탭": "🗓️ 일정",
+                "내역": f"일정 등록/수정: {str(x.get('title', '') or '')}",
+                "입금": 0,
+                "출금": 0,
+                "기록자": str(x.get("recorder", "") or "관리자"),
+                "대상": "전체",
+                "분류": "schedule",
+                "변경후잔액": "",
+                "_sort_dt": dt_utc or datetime.min.replace(tzinfo=timezone.utc),
+            }
+        )
+
+
+        # 8) 입금 승인 요청(생성/처리)
+    for d in _safe_stream_recent(DEP_REQ_COL, "created_at", limit_per_source):
+        x = d.to_dict() or {}
+        created_dt = _to_utc_datetime(x.get("created_at"))
+        processed_dt = _to_utc_datetime(x.get("processed_at"))
+        status = str(x.get("status", "pending") or "pending").strip().lower()
+        student_label = f"{_to_int_safe(x.get('no', 0), 0)}번 {str(x.get('name', '') or '')}".strip()
+        memo = str(x.get("memo", "") or "")
+        amount = _to_int_safe(x.get("amount", 0), 0)
+
+        rows.append(
+            {
+                "시간": format_kr_datetime_no_year(created_dt.astimezone(KST)) if created_dt else "",
+                "탭": "✅ 입금 승인",
+                "내역": f"입금 신청: {memo}",
+                "입금": int(amount),
+                "출금": 0,
+                "기록자": student_label or "-",
+                "대상": student_label or "-",
+                "분류": "pending",
+                "변경후잔액": "",
+                "_sort_dt": created_dt or datetime.min.replace(tzinfo=timezone.utc),
+            }
+        )
+        if processed_dt:
+            rows.append(
+                {
+                    "시간": format_kr_datetime_no_year(processed_dt.astimezone(KST)) if processed_dt else "",
+                    "탭": "✅ 입금 승인",
+                    "내역": f"입금 신청 처리({status}): {memo}",
+                    "입금": int(amount if status == "approved" else 0),
+                    "출금": 0,
+                    "기록자": "관리자",
+                    "대상": student_label or "-",
+                    "분류": status,
+                    "변경후잔액": "",
+                    "_sort_dt": processed_dt or datetime.min.replace(tzinfo=timezone.utc),
+                }
+            )
+
+    # 9) 적금(savings) 상태 변경
+    for d in _safe_stream_recent("savings", "start_date", limit_per_source):
+        x = d.to_dict() or {}
+        sid = str(x.get("student_id", "") or "")
+        stu = student_map.get(sid, {})
+        status = str(x.get("status", "active") or "active").strip().lower()
+        weeks = _to_int_safe(x.get("weeks", 0), 0)
+        principal = _to_int_safe(x.get("principal", 0), 0)
+        start_dt = _to_utc_datetime(x.get("start_date") or x.get("start_utc") or x.get("created_at"))
+        maturity_dt = _to_utc_datetime(x.get("maturity_date") or x.get("maturity_utc"))
+        rows.append(
+            {
+                "시간": format_kr_datetime_no_year(start_dt.astimezone(KST)) if start_dt else "",
+                "탭": "🏦 은행(적금)",
+                "내역": f"적금 가입({weeks}주)",
+                "입금": 0,
+                "출금": int(principal),
+                "기록자": f"{_to_int_safe(stu.get('no', 0), 0)}번 {str(stu.get('name', '') or sid)}",
+                "대상": f"{_to_int_safe(stu.get('no', 0), 0)}번 {str(stu.get('name', '') or sid)}",
+                "분류": "created",
+                "변경후잔액": "",
+                "_sort_dt": start_dt or datetime.min.replace(tzinfo=timezone.utc),
+            }
+        )
+        if maturity_dt and status == "matured":
+            rows.append(
+                {
+                    "시간": format_kr_datetime_no_year(maturity_dt.astimezone(KST)) if maturity_dt else "",
+                    "탭": "🏦 은행(적금)",
+                    "내역": f"적금 만기 처리({weeks}주)",
+                    "입금": int(principal + _to_int_safe(x.get('interest', 0), 0)),
+                    "출금": 0,
+                    "기록자": "시스템",
+                    "대상": f"{_to_int_safe(stu.get('no', 0), 0)}번 {str(stu.get('name', '') or sid)}",
+                    "분류": "matured",
+                    "변경후잔액": "",
+                    "_sort_dt": maturity_dt or datetime.min.replace(tzinfo=timezone.utc),
+                }
+            )
+        elif status == "canceled":
+            cancel_dt = _to_utc_datetime(x.get("processed_at") or x.get("updated_at") or x.get("canceled_at"))
+            rows.append(
+                {
+                    "시간": format_kr_datetime_no_year(cancel_dt.astimezone(KST)) if cancel_dt else "",
+                    "탭": "🏦 은행(적금)",
+                    "내역": f"적금 중도해지({weeks}주)",
+                    "입금": int(principal),
+                    "출금": 0,
+                    "기록자": "사용자",
+                    "대상": f"{_to_int_safe(stu.get('no', 0), 0)}번 {str(stu.get('name', '') or sid)}",
+                    "분류": "canceled",
+                    "변경후잔액": "",
+                    "_sort_dt": cancel_dt or start_dt or datetime.min.replace(tzinfo=timezone.utc),
+                }
+            )
+
+    # 10) 권한부여(students.extra_permissions 변경 이력)
+    for d in _safe_stream_recent("students", "updated_at", limit_per_source):
+        x = d.to_dict() or {}
+        upd_dt = _to_utc_datetime(x.get("updated_at"))
+        if not upd_dt:
+            continue
+        extras = list(x.get("extra_permissions", []) or [])
+        if not extras:
+            continue
+        no = _to_int_safe(x.get("no", 0), 0)
+        nm = str(x.get("name", "") or d.id)
+        for perm in extras:
+            p = str(perm or "").strip()
+            if not p:
+                continue
+            p_type = "tab_permission" if p.startswith("tab::") else ("admin_permission" if p.startswith("admin::") else "updated")
+            rows.append(
+                {
+                    "시간": format_kr_datetime_no_year(upd_dt.astimezone(KST)) if upd_dt else "",
+                    "탭": "⭐ 권한부여",
+                    "내역": f"권한 보유 상태: {p}",
+                    "입금": 0,
+                    "출금": 0,
+                    "기록자": "관리자",
+                    "대상": f"{no}번 {nm}",
+                    "분류": p_type,
+                    "변경후잔액": "",
+                    "_sort_dt": upd_dt,
+                }
+            )
+
+    # 11) 마트 요청(요청/거절) 로그
+    for d in _safe_stream_recent("mart_requests", "created_at", limit_per_source):
+        x = d.to_dict() or {}
+        created_dt = _to_utc_datetime(x.get("created_at"))
+        status = str(x.get("status", "pending") or "pending").strip().lower()
+        no = _to_int_safe(x.get("student_no", 0), 0)
+        nm = str(x.get("student_name", "") or "")
+        item = str(x.get("item", "") or "")
+        price = _to_int_safe(x.get("price", 0), 0)
+        rows.append(
+            {
+                "시간": format_kr_datetime_no_year(created_dt.astimezone(KST)) if created_dt else "",
+                "탭": "🛒마트",
+                "내역": f"구매 요청: {item}",
+                "입금": 0,
+                "출금": int(price),
+                "기록자": f"{no}번 {nm}",
+                "대상": f"{no}번 {nm}",
+                "분류": "pending",
+                "변경후잔액": "",
+                "_sort_dt": created_dt or datetime.min.replace(tzinfo=timezone.utc),
+            }
+        )
+        if status == "rejected":
+            rej_dt = _to_utc_datetime(x.get("rejected_at"))
+            rows.append(
+                {
+                    "시간": format_kr_datetime_no_year(rej_dt.astimezone(KST)) if rej_dt else "",
+                    "탭": "🛒마트",
+                    "내역": f"구매 요청 거절: {item}",
+                    "입금": 0,
+                    "출금": 0,
+                    "기록자": "관리자",
+                    "대상": f"{no}번 {nm}",
+                    "분류": "rejected",
+                    "변경후잔액": "",
+                    "_sort_dt": rej_dt or created_dt or datetime.min.replace(tzinfo=timezone.utc),
+                }
+            )
+            
+    rows.sort(key=lambda r: r.get("_sort_dt") or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+    rows = rows[: int(max_rows)]
+    for r in rows:
+        r["분류"] = _category_to_korean(r.get("분류", ""))
+        r.pop("_sort_dt", None)
+    return rows
 
 
 # =========================
@@ -14690,6 +15095,58 @@ if "🍀 복권" in tabs:
                     st.dataframe(pd.DataFrame(hist_rows), use_container_width=True, hide_index=True)
                 else:
                     st.info("복권 구매 내역이 없습니다.")
+                    
+# =========================
+# 🧾 로그기록 (관리자 활동/거래 통합 로그)
+# =========================
+if "🧾 로그기록" in tabs:
+    with tab_map["🧾 로그기록"]:
+        if not (is_admin or has_tab_access(my_perms, "🧾 로그기록", is_admin=False)):
+            st.info("이 탭은 관리자 전용입니다.")
+        else:
+            st.markdown("### 🧾 통합 로그기록")
+            st.caption("모든 탭의 변경 이력을 분리 없이 하나의 표로 통합해 보여줍니다.")
+
+            # ✅ 요청 반영: 탭별 분리 없이 '단일 통합표'만 제공
+            max_log_rows = st.number_input("표시 행 수", min_value=100, max_value=10000, value=3000, step=100, key="audit_max_rows")
+            all_rows = _build_activity_log_rows(limit_per_source=800, max_rows=int(max_log_rows))
+            if not all_rows:
+                st.info("표시할 로그가 없습니다.")
+            else:
+                df_logs = pd.DataFrame(all_rows)
+                keyword = st.text_input("검색(탭/내역/기록자/대상)", key="audit_keyword").strip()
+                if keyword:
+                    kw = str(keyword).lower()
+                    df_logs = df_logs[
+                        df_logs.apply(
+                            lambda r: kw in str(r.get("탭", "")).lower()
+                            or kw in str(r.get("내역", "")).lower()
+                            or kw in str(r.get("기록자", "")).lower()
+                            or kw in str(r.get("대상", "")).lower(),
+                            axis=1,
+                        )
+                    ]
+                if not df_logs.empty:
+                    df_logs = df_logs.reset_index(drop=True)
+                    df_logs.insert(0, "번호", df_logs.index + 1)
+                st.dataframe(
+                    df_logs[
+                        [
+                            "번호",
+                            "시간",
+                            "대상",
+                            "탭",
+                            "내역",
+                            "입금",
+                            "출금",
+                            "기록자",
+                            "분류",
+                            "변경후잔액",
+                        ]
+                    ],
+                    use_container_width=True,
+                    hide_index=True,
+                )
                     
 # =========================
 # 📊 통계/신용 (학생 전용 · 읽기 전용)
