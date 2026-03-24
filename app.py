@@ -5,6 +5,7 @@ import pandas as pd
 import altair as alt
 from io import BytesIO
 import random
+import math
 
 from datetime import datetime, timezone, timedelta, date
 
@@ -29,6 +30,9 @@ ADMIN_NAME = "관리자"
 # 신용등급 미반영 학생도 기본 기능(은행/경매/복권)을 바로 사용하도록 기본값 고정
 DEFAULT_CREDIT_SCORE = 50
 DEFAULT_CREDIT_GRADE = 5
+
+# 투자: 주가 1포인트당 손익 반영 기본값(%)
+DEFAULT_POINT_PROFIT_PCT = 10.0
 
 # =========================
 # 모바일 UI CSS + 템플릿 정렬(촘촘) CSS
@@ -216,7 +220,15 @@ st.markdown(
         background: rgba(0,0,0,0.03);
         text-align: center;
     }
-
+    .inv_hist_table_wrap {
+        height: 260px;
+        overflow-y: auto;
+        overflow-x: auto;
+    }    
+    .inv_hist_compact {
+        margin-top: -28px;
+    }
+    
 /* ✅ stat_cellpick_ 전용: 선택 색상(순서 기반) */
 
 /* (중요) 기본 선택 배경 리셋은 "stat_cellpick_"에만 적용 */
@@ -689,6 +701,11 @@ def toast(msg: str, icon: str = "✅"):
     else:
         st.success(msg)
 
+
+def render_template_section_divider():
+    st.markdown("<div style='height:4em'></div>", unsafe_allow_html=True)
+    st.markdown("<hr style='border:none; border-top:2px solid #8a8a8a; margin:0.4rem 0 1.8rem 0;'>", unsafe_allow_html=True)
+
 def is_admin_login(name: str, pin: str) -> bool:
     return (str(name or "").strip() == ADMIN_NAME) and (str(pin or "").strip() == ADMIN_PIN)
 
@@ -814,7 +831,7 @@ def _list_active_students_full_cached() -> list[dict]:
 
 
 @st.cache_data(ttl=60, show_spinner=False)
-def _get_invest_products_map_cached() -> dict[str, tuple[str, float]]:
+def _get_invest_products_map_cached() -> dict[str, tuple[str, float, float]]:
     """invest_products 전체 스냅샷 캐시(학생별 요약 계산 시 중복 stream 방지)."""
     prod_map = {}
     for d in db.collection(INV_PROD_COL).stream():
@@ -828,7 +845,8 @@ def _get_invest_products_map_cached() -> dict[str, tuple[str, float]]:
             or pid
         )
         cur_price = float(x.get("current_price", 0.0) or 0.0)
-        prod_map[pid] = (pname, cur_price)
+        point_profit_pct = float(x.get("point_profit_pct", DEFAULT_POINT_PROFIT_PCT) or DEFAULT_POINT_PROFIT_PCT)
+        prod_map[pid] = (pname, cur_price, point_profit_pct)
     return prod_map
 
 
@@ -949,10 +967,13 @@ def _get_invest_summary_by_student_id(student_id: str) -> tuple[str, int]:
             buy_price = float(x.get("buy_price", 0.0) or 0.0)
             invest_amount = int(x.get("invest_amount", 0) or 0)
 
-            pname, cur_price = prod_map.get(pid, (pid, 0.0))
+            pname, cur_price, point_profit_pct = prod_map.get(pid, (pid, 0.0, DEFAULT_POINT_PROFIT_PCT))
+            point_profit_pct = float(x.get("point_profit_pct", point_profit_pct) or point_profit_pct)
 
             # 현재 평가금은 투자 회수(지급) 계산과 동일 규칙 사용
-            _, _, cur_val = _calc_invest_redeem_projection(invest_amount, buy_price, cur_price)
+            _, _, cur_val = _calc_invest_redeem_projection(
+                invest_amount, buy_price, cur_price, point_profit_pct=point_profit_pct
+            )
 
             per_prod_val[pid] = per_prod_val.get(pid, 0) + cur_val
 
@@ -965,11 +986,11 @@ def _get_invest_summary_by_student_id(student_id: str) -> tuple[str, int]:
         # 표시: 종목명 오름차순, 개수 제한 없이 모두 표시
         items = sorted(
             per_prod_val.items(),
-            key=lambda kv: str(prod_map.get(kv[0], (kv[0], 0.0))[0] or kv[0]),
+            key=lambda kv: str(prod_map.get(kv[0], (kv[0], 0.0, DEFAULT_POINT_PROFIT_PCT))[0] or kv[0]),
         )
         shown = []
         for pid, v in items:
-            pname = prod_map.get(pid, (pid, 0.0))[0]
+            pname = prod_map.get(pid, (pid, 0.0, DEFAULT_POINT_PROFIT_PCT))[0]
             shown.append(f"{pname} {int(round(v))}드림")
         text = ", ".join(shown)
 
@@ -978,32 +999,44 @@ def _get_invest_summary_by_student_id(student_id: str) -> tuple[str, int]:
         return ("없음", 0)
 
 
-def _calc_invest_redeem_projection(invest_amount: int, buy_price: float, sell_price: float):
+def _calc_invest_redeem_projection(
+    invest_amount: int,
+    buy_price: float,
+    sell_price: float,
+    buy_real_price: float | None = None,
+    sell_real_price: float | None = None,
+    point_profit_pct: float = DEFAULT_POINT_PROFIT_PCT,
+):
     """
     투자 회수(지급)와 동일한 기준으로 현재 평가/예상 회수금 계산.
     return: (등락폭, 수익/손실, 회수예상금[int])
     """
-    def _as_price1_local(v):
+    def _as_price2_local(v):
         try:
-            return float(f"{float(v):.1f}")
+            return float(f"{float(v):.2f}")
         except Exception:
             return 0.0
     invest_amount = int(invest_amount or 0)
-    buy_price = _as_price1_local(buy_price)
-    sell_price = _as_price1_local(sell_price)
-    diff = _as_price1_local(sell_price - buy_price)
+    buy_price = _as_price2_local(buy_price)
+    sell_price = _as_price2_local(sell_price)
+    buy_real_price = _as_price2_local(buy_real_price) if buy_real_price is not None else 0.0
+    sell_real_price = _as_price2_local(sell_real_price) if sell_real_price is not None else 0.0
+    point_profit_pct = float(point_profit_pct if point_profit_pct is not None else DEFAULT_POINT_PROFIT_PCT)
+
+    use_real_price = buy_real_price > 0 and sell_real_price > 0
+    diff = _as_price2_local((sell_real_price - buy_real_price) if use_real_price else (sell_price - buy_price))
 
     # diff <= -100 : 전액 손실
     if diff <= -100:
         profit = -invest_amount
         redeem_amt = 0
     else:
-        profit = invest_amount * float(diff) / 10.0
+        profit = invest_amount * float(diff) * (point_profit_pct / 100.0)
         redeem_amt = invest_amount + profit
         if redeem_amt < 0:
             redeem_amt = 0
 
-    return diff, profit, int(round(redeem_amt))
+    return diff, int(round(profit)), int(round(redeem_amt))
     
 
 @st.cache_data(ttl=30, show_spinner=False)
@@ -1104,6 +1137,21 @@ def _norm_status(v) -> str:
         return "△"
     return "X"
 
+def _sum_manual_credit_delta(student_id: str) -> int:
+    total = 0
+    try:
+        q = (
+            db.collection("credit_adjustments")
+            .where(filter=build_filter("student_id", "==", str(student_id)))
+            .stream()
+        )
+        for d in q:
+            x = d.to_dict() or {}
+            total += int(x.get("delta", 0) or 0)
+    except Exception:
+        return 0
+    return int(total)
+
 def _calc_credit_score_for_student(student_id: str):
     credit_cfg = _get_credit_cfg()
     base = int(credit_cfg.get("base", 50) if credit_cfg.get("base", None) is not None else 50)
@@ -1132,6 +1180,11 @@ def _calc_credit_score_for_student(student_id: str):
             score = 100
         if score < 0:
             score = 0
+    score = int(score + _sum_manual_credit_delta(student_id))
+    if score > 100:
+        score = 100
+    if score < 0:
+        score = 0            
 
     grade = _score_to_grade(score)
     return score, grade
@@ -3446,45 +3499,56 @@ def render_treasury_trade_ui(prefix: str, templates_list: list, template_by_disp
         st.session_state[f"{prefix}_skip_once"] = False
         st.session_state[reset_flag_key] = False    
 
-    # 템플릿 선택
-    tpl_labels = ["(직접 입력)"] + [treasury_template_display(t) for t in templates_list]
-    sel = st.selectbox("국고 템플릿", tpl_labels, key=tpl_key)
+    _frag = getattr(st, "fragment", None)
+    use_fragment = callable(_frag)
+    
+    def _draw_ui():
+        # 템플릿 선택
+        tpl_labels = ["(직접 입력)"] + [treasury_template_display(t) for t in templates_list]
+        sel = st.selectbox("국고 템플릿", tpl_labels, key=tpl_key)
 
-    # 템플릿 바뀌면 내역/금액 자동채움
-    if sel != st.session_state.get(tpl_prev_key):
-        st.session_state[tpl_prev_key] = sel
+        # 템플릿 바뀌면 내역/금액 자동채움
+        if sel != st.session_state.get(tpl_prev_key):
+            st.session_state[tpl_prev_key] = sel
 
-        if sel != "(직접 입력)":
-            t = template_by_display.get(sel)
-            if t:
-                st.session_state[memo_key] = str(t.get("label", "") or "")
-                amt = int(t.get("amount", 0) or 0)
-                if str(t.get("kind")) == "income":
-                    st.session_state[inc_key] = amt
-                    st.session_state[exp_key] = 0
-                else:
-                    st.session_state[inc_key] = 0
-                    st.session_state[exp_key] = amt
+            if sel != "(직접 입력)":
+                t = template_by_display.get(sel)
+                if t:
+                    st.session_state[memo_key] = str(t.get("label", "") or "")
+                    amt = int(t.get("amount", 0) or 0)
+                    if str(t.get("kind")) == "income":
+                        st.session_state[inc_key] = amt
+                        st.session_state[exp_key] = 0
+                    else:
+                        st.session_state[inc_key] = 0
+                        st.session_state[exp_key] = amt    
 
-        st.rerun()
+        
+        # 내역 입력
+        st.text_input("내역", key=memo_key)
 
-    # 내역 입력
-    st.text_input("내역", key=memo_key)
+        # ✅ 원형 숫자 버튼(빠른 금액) — 국고 전용 prefix를 그대로 사용
+        render_round_amount_picker(
+            prefix=prefix,                # ✅ 여기 중요: "treasury_trade" 그대로 연동됨
+            plus_label="세입(+)",
+            minus_label="세출(-)",
+            amounts=[0, 10, 20, 50, 100, 200, 500, 1000],
+        )
 
-    # ✅ 원형 숫자 버튼(빠른 금액) — 국고 전용 prefix를 그대로 사용
-    render_round_amount_picker(
-        prefix=prefix,                # ✅ 여기 중요: "treasury_trade" 그대로 연동됨
-        plus_label="세입(+)",
-        minus_label="세출(-)",
-        amounts=[0, 10, 20, 50, 100, 200, 500, 1000],
-    )
+        # 숫자 입력(세입/세출)
+        c1, c2 = st.columns(2)
+        with c1:
+            st.number_input("세입", min_value=0, step=1, key=inc_key)
+        with c2:
+            st.number_input("세출", min_value=0, step=1, key=exp_key)
 
-    # 숫자 입력(세입/세출)
-    c1, c2 = st.columns(2)
-    with c1:
-        st.number_input("세입", min_value=0, step=1, key=inc_key)
-    with c2:
-        st.number_input("세출", min_value=0, step=1, key=exp_key)
+    if use_fragment:
+        @_frag
+        def _frag_draw():
+            _draw_ui()
+        _frag_draw()
+    else:
+        _draw_ui()
 
     # ✅ 함수 안에서 return (return outside function 방지)
     memo = str(st.session_state.get(memo_key, "") or "").strip()
@@ -3595,8 +3659,6 @@ def render_admin_trade_ui(prefix: str, templates_list: list, template_by_display
 
                     st.session_state[f"{prefix}_quick_skip_once"] = True
 
-            if not use_fragment:
-                st.rerun()
 
         st.text_input("내역", key=memo_key)
 
@@ -6538,6 +6600,21 @@ def _norm_status(v) -> str:
         return "△"
     return "X"
 
+def _sum_manual_credit_delta(student_id: str) -> int:
+    total = 0
+    try:
+        q = (
+            db.collection("credit_adjustments")
+            .where(filter=build_filter("student_id", "==", str(student_id)))
+            .stream()
+        )
+        for d in q:
+            x = d.to_dict() or {}
+            total += int(x.get("delta", 0) or 0)
+    except Exception:
+        return 0
+    return int(total)
+
 def _calc_credit_score_for_student(student_id: str):
     credit_cfg = _get_credit_cfg()
     base = int(credit_cfg.get("base", 50) if credit_cfg.get("base", None) is not None else 50)
@@ -6566,7 +6643,12 @@ def _calc_credit_score_for_student(student_id: str):
             score = 100
         if score < 0:
             score = 0
-
+    score = int(score + _sum_manual_credit_delta(student_id))
+    if score > 100:
+        score = 100
+    if score < 0:
+        score = 0
+        
     grade = _score_to_grade(score)
     return score, grade
 
@@ -6616,26 +6698,14 @@ def _category_to_korean(category: str) -> str:
         "matured": "만기",
         "tab_permission": "탭 권한",
         "admin_permission": "관리자기능 권한",
+        "credit_adjust": "신용점수 수동조정",
     }
     return mapping.get(key, str(category or ""))
 
 def _actor_to_korean(actor: str) -> str:
     key = str(actor or "").strip().lower()
     mapping = {
-        "treasury": "국세청(수기 입력)",
-        "deposit_approve": "입금 승인 처리",
-        "auction": "경매",
-        "lottery": "복권",
-        "lottery_admin": "복권(관리자 처리)",
-        "mart": "마트",
-        "auto": "자동 처리",
-        "admin_auto": "관리자 자동 처리",
-        "admin_bulk_auto": "관리자 일괄 자동 처리",
-        "rollback": "되돌리기",        
         "system_salary": "시스템(월급)",
-        "all": "전체",
-        "전체": "전체",
-        "국고": "국고",
     }
     return mapping.get(key, str(actor or ""))
 
@@ -6972,6 +7042,30 @@ def _build_activity_log_rows(limit_per_source: int = 300, max_rows: int = 1200):
                     "_sort_dt": rej_dt or created_dt or datetime.min.replace(tzinfo=timezone.utc),
                 }
             )
+
+        # 12) 신용점수 수동 조정 장부
+    for d in _safe_stream_recent("credit_adjustments", "created_at", limit_per_source):
+        x = d.to_dict() or {}
+        sid = str(x.get("student_id", "") or "")
+        stu = student_map.get(sid, {})
+        dt_utc = _to_utc_datetime(x.get("created_at"))
+        delta = _to_int_safe(x.get("delta", 0), 0)
+        score_after = _to_int_safe(x.get("score_after", 0), 0)
+        grade_after = _to_int_safe(x.get("grade_after", 0), 0)
+        rows.append(
+            {
+                "시간": format_kr_datetime_no_year(dt_utc.astimezone(KST)) if dt_utc else "",
+                "탭": "💳 신용등급",
+                "내역": f"신용점수 수동 조정 ({delta:+d}점, 조정후 {score_after}점/{grade_after}등급)",
+                "입금": 0,
+                "출금": 0,
+                "기록자": str(x.get("recorder", "") or "관리자"),
+                "대상": f"{_to_int_safe(stu.get('no', 0), 0)}번 {str(stu.get('name', '') or sid)}",
+                "분류": "credit_adjust",
+                "변경후잔액": "",
+                "_sort_dt": dt_utc or datetime.min.replace(tzinfo=timezone.utc),
+            }
+        )
             
     rows.sort(key=lambda r: r.get("_sort_dt") or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
     rows = rows[: int(max_rows)]
@@ -7005,6 +7099,13 @@ def render_tx_table(df_tx: pd.DataFrame):
         use_container_width=True,
         hide_index=True,
     )
+
+def fragment_if_available(fn):
+    """Streamlit fragment 지원 시 해당 렌더 함수만 부분 rerun."""
+    _frag = getattr(st, "fragment", None)
+    if callable(_frag):
+        return _frag(fn)
+    return fn
 
 def refresh_account_data_light(name: str, pin: str, force: bool = False):
     now = datetime.now(KST)
@@ -7322,6 +7423,7 @@ if "🏦 내 통장" in tabs:
                 # -------------------------------------------------
                 # 3) 템플릿 추가/수정/삭제
                 # -------------------------------------------------
+                render_template_section_divider()
                 st.markdown("### 🧩 템플릿 추가/수정/삭제")
 
                 KIND_TO_KR = {"deposit": "입금", "withdraw": "출금"}
@@ -8098,6 +8200,7 @@ if "admin::🏦 내 통장" in tabs:
                 # -------------------------------------------------
                 # 3) 템플릿 추가/수정/삭제
                 # -------------------------------------------------
+                render_template_section_divider()
                 st.markdown("### 🧩 템플릿 추가/수정/삭제")
 
                 KIND_TO_KR = {"deposit": "입금", "withdraw": "출금"}
@@ -8414,9 +8517,7 @@ if "admin::🏦 내 통장" in tabs:
 # =========================
 # 📈 투자 (공용 렌더: 관리자 탭과 투자(관리자) 탭을 동일 코드로 처리)
 # =========================
-# =========================
-# 📈 투자 (공용 렌더: 관리자 탭과 투자(관리자) 탭을 동일 코드로 처리)
-# =========================
+@fragment_if_available
 def _render_invest_admin_like(*, inv_admin_ok_flag: bool, force_is_admin: bool, my_student_id, login_name, login_pin):
     """관리자 투자 화면을 동일하게 렌더링(권한 학생의 투자(관리자) 탭에서도 동일 UI/기능)."""
     # ✅ 이 함수 내부에서는 is_admin 값을 force_is_admin으로 "가상" 설정해서
@@ -8436,9 +8537,98 @@ def _render_invest_admin_like(*, inv_admin_ok_flag: bool, force_is_admin: bool, 
     
     def _as_price1(v):
         try:
-            return float(f"{float(v):.1f}")
+            return float(f"{float(v):.2f}")
         except Exception:
             return 0.0
+
+    def _clamp(v, lo, hi):
+        try:
+            vv = float(v)
+        except Exception:
+            vv = float(lo)
+        return max(float(lo), min(float(hi), vv))
+
+    def _normalize_to_100(real_price: float, min_price: float, max_price: float):
+        mn = _as_price1(min_price)
+        mx = _as_price1(max_price)
+        rp = _as_price1(real_price)
+        if mx <= mn:
+            return 0.0
+        pct = ((rp - mn) / (mx - mn)) * 100.0
+        return _as_price1(_clamp(pct, 0.0, 100.0))
+
+    def _nice_step(raw_step: float) -> float:
+        rs = float(raw_step or 0.0)
+        if rs <= 0:
+            return 1.0
+        exponent = math.floor(math.log10(rs))
+        base = 10 ** exponent
+        fraction = rs / base
+        if fraction <= 1:
+            nice_fraction = 1
+        elif fraction <= 2:
+            nice_fraction = 2
+        elif fraction <= 5:
+            nice_fraction = 5
+        else:
+            nice_fraction = 10
+        return float(nice_fraction * base)
+
+    def _next_nice_step(step: float) -> float:
+        s = float(step or 1.0)
+        exponent = math.floor(math.log10(s))
+        base = 10 ** exponent
+        fraction = s / base
+        if fraction <= 1:
+            return float(2 * base)
+        if fraction <= 2:
+            return float(5 * base)
+        if fraction <= 5:
+            return float(10 * base)
+        return float(20 * base)
+
+    def _calc_nice_y_axis(values: list[float], target_ticks: int = 6):
+        nums = []
+        for v in values or []:
+            try:
+                nums.append(float(v))
+            except Exception:
+                continue
+        if not nums:
+            return 0.0, 100.0, [0, 20, 40, 60, 80, 100]
+
+        vmin = min(nums)
+        vmax = max(nums)
+        vrange = vmax - vmin
+
+        if vrange <= 0:
+            base_step = _nice_step(max(abs(vmax), 1.0) / max(target_ticks - 1, 1))
+            y_min = math.floor(vmin / base_step) * base_step
+            y_max = math.ceil(vmax / base_step) * base_step
+            if y_max <= y_min:
+                y_max = y_min + base_step
+            ticks = [round(y_min + (base_step * i), 10) for i in range(target_ticks)]
+            return float(y_min), float(y_max), ticks
+
+        raw_step = vrange / max(target_ticks - 1, 1)
+        step = _nice_step(raw_step)
+
+        y_min = math.floor(vmin / step) * step
+        y_max = math.ceil(vmax / step) * step
+        if y_max <= y_min:
+            y_max = y_min + step
+
+        tick_count = int(round((y_max - y_min) / step)) + 1
+        while tick_count > 6:
+            step = _next_nice_step(step)
+            y_min = math.floor(vmin / step) * step
+            y_max = math.ceil(vmax / step) * step
+            if y_max <= y_min:
+                y_max = y_min + step
+            tick_count = int(round((y_max - y_min) / step)) + 1
+
+        ticks = [round(y_min + (step * i), 10) for i in range(tick_count)]
+        return float(y_min), float(y_max), ticks
     
     def _ts_to_dt(v):
         if v is None:
@@ -8526,6 +8716,7 @@ def _render_invest_admin_like(*, inv_admin_ok_flag: bool, force_is_admin: bool, 
     # -------------------------
     # 주가 변동 내역 로드 (표용)
     # -------------------------
+    @st.cache_data(ttl=20, show_spinner=False)
     def _get_history(product_id: str, limit=120):
         pid = str(product_id)
         out = []
@@ -8546,6 +8737,8 @@ def _render_invest_admin_like(*, inv_admin_ok_flag: bool, force_is_admin: bool, 
                         "reason": str(x.get("reason", "") or "").strip(),
                         "price_before": _as_price1(x.get("price_before", x.get("price", 0.0))),
                         "price_after": _as_price1(x.get("price_after", x.get("price", 0.0))),
+                        "real_price_before": _as_price1(x.get("real_price_before", x.get("price_before", x.get("price", 0.0)))),
+                        "real_price_after": _as_price1(x.get("real_price_after", x.get("price_after", x.get("price", 0.0)))),
                     }
                 )
             return out
@@ -8568,6 +8761,8 @@ def _render_invest_admin_like(*, inv_admin_ok_flag: bool, force_is_admin: bool, 
                         "reason": str(x.get("reason", "") or "").strip(),
                         "price_before": _as_price1(x.get("price_before", x.get("price", 0.0))),
                         "price_after": _as_price1(x.get("price_after", x.get("price", 0.0))),
+                        "real_price_before": _as_price1(x.get("real_price_before", x.get("price_before", x.get("price", 0.0)))),
+                        "real_price_after": _as_price1(x.get("real_price_after", x.get("price_after", x.get("price", 0.0)))),
                     }
                 )
             out.sort(key=lambda r: str(r.get("created_at") or ""), reverse=True)
@@ -8578,6 +8773,7 @@ def _render_invest_admin_like(*, inv_admin_ok_flag: bool, force_is_admin: bool, 
     # -------------------------
     # 종목 로드
     # -------------------------
+    @st.cache_data(ttl=20, show_spinner=False)    
     def _get_products(active_only=True):
         try:
             q = db.collection(INV_PROD_COL)
@@ -8594,10 +8790,25 @@ def _render_invest_admin_like(*, inv_admin_ok_flag: bool, force_is_admin: bool, 
                     {
                         "product_id": d.id,
                         "name": nm,
+                        "min_price": _as_price1(x.get("min_price", 0.0)),
+                        "max_price": _as_price1(x.get("max_price", 100.0)),
+                        "real_price": _as_price1(x.get("real_price", x.get("current_price", 0.0))),
                         "current_price": _as_price1(x.get("current_price", 0.0)),
+                        "point_profit_pct": float(x.get("point_profit_pct", DEFAULT_POINT_PROFIT_PCT) or DEFAULT_POINT_PROFIT_PCT),
                         "is_active": bool(x.get("is_active", True)),
                     }
                 )
+            for r in out:
+                mn = float(r.get("min_price", 0.0) or 0.0)
+                mx = float(r.get("max_price", 100.0) or 100.0)
+                rp = float(r.get("real_price", r.get("current_price", 0.0)) or 0.0)
+                if mx <= mn:
+                    mx = mn + 1.0
+                r["min_price"] = _as_price1(mn)
+                r["max_price"] = _as_price1(mx)
+                r["real_price"] = _as_price1(rp)
+                # 레거시 데이터가 current_price만 있는 경우에도 환산값으로 일관되게 노출
+                r["current_price"] = _normalize_to_100(r["real_price"], r["min_price"], r["max_price"])                
             out.sort(key=lambda r: r["name"])
             return out
         except Exception:
@@ -8606,8 +8817,17 @@ def _render_invest_admin_like(*, inv_admin_ok_flag: bool, force_is_admin: bool, 
     # -------------------------
     # 회수 계산(÷10)
     # -------------------------
-    def _calc_redeem_amount(invest_amount: int, buy_price: float, sell_price: float):
-        return _calc_invest_redeem_projection(invest_amount, buy_price, sell_price)
+    def _calc_redeem_amount(
+        invest_amount: int,
+        buy_price: float,
+        sell_price: float,
+        buy_real_price: float | None = None,
+        sell_real_price: float | None = None,
+        point_profit_pct: float = DEFAULT_POINT_PROFIT_PCT,
+    ):
+        return _calc_invest_redeem_projection(
+            invest_amount, buy_price, sell_price, buy_real_price, sell_real_price, point_profit_pct
+        )
     
     # -------------------------------------------------
     # 1) (상단) 종목 및 주가 변동
@@ -8646,6 +8866,7 @@ def _render_invest_admin_like(*, inv_admin_ok_flag: bool, force_is_admin: bool, 
         try:
             prods_now = _get_products(active_only=True)
             price_by_id = {str(p["product_id"]): float(p.get("current_price", 0.0) or 0.0) for p in prods_now}
+            pct_by_id = {str(p["product_id"]): float(p.get("point_profit_pct", DEFAULT_POINT_PROFIT_PCT) or DEFAULT_POINT_PROFIT_PCT) for p in prods_now}
             name_by_id = {str(p["product_id"]): str(p.get("name", "") or "") for p in prods_now}
 
             my_rows = _load_ledger(my_student_id)
@@ -8667,9 +8888,12 @@ def _render_invest_admin_like(*, inv_admin_ok_flag: bool, force_is_admin: bool, 
 
                 buy_price = float(r.get("buy_price", 0.0) or 0.0)
                 cur_price = float(price_by_id.get(pid, 0.0) or 0.0)
+                point_profit_pct = float(r.get("point_profit_pct", pct_by_id.get(pid, DEFAULT_POINT_PROFIT_PCT)) or DEFAULT_POINT_PROFIT_PCT)
 
                 # ✅ 현재 평가는 투자 회수(지급) 계산과 동일 규칙 적용
-                _, _, cur_val = _calc_invest_redeem_projection(amt, buy_price, cur_price)
+                _, _, cur_val = _calc_invest_redeem_projection(
+                    amt, buy_price, cur_price, point_profit_pct=point_profit_pct
+                )
 
                 _add_sum(principal_by_name, nm, amt)
                 _add_sum(eval_by_name, nm, int(round(cur_val)))
@@ -8690,13 +8914,18 @@ def _render_invest_admin_like(*, inv_admin_ok_flag: bool, force_is_admin: bool, 
         for p in products:
             nm = p["name"]
             cur = p["current_price"]
-            st.markdown(f"- **{nm}** (현재주가 **{cur:.1f}**)")
-    
+            real_cur = float(p.get("real_price", cur) or 0.0)
+            min_p = float(p.get("min_price", 0.0) or 0.0)
+            max_p = float(p.get("max_price", 100.0) or 100.0)
+            st.markdown(
+                f"- **{nm}** [실제주가: **{real_cur:.2f}**(범위 **{min_p:.2f}~{max_p:.2f}**), 환산주가: **{cur:.2f}**, 주가 1당 손익 **{float(p.get('point_profit_pct', DEFAULT_POINT_PROFIT_PCT) or DEFAULT_POINT_PROFIT_PCT):.2f}%**]"
+            )
+            
             if inv_admin_ok:
                 inv_reset_key = f"inv_reset_req_{p['product_id']}"
                 if st.session_state.get(inv_reset_key, False):
                     st.session_state[f"inv_reason_{p['product_id']}"] = ""
-                    st.session_state[f"inv_price_{p['product_id']}"] = float(cur)
+                    st.session_state[f"inv_price_{p['product_id']}"] = float(real_cur)
                     st.session_state[inv_reset_key] = False
                     
                 with st.expander(f"{nm} 주가 변동 반영", expanded=False):
@@ -8704,15 +8933,18 @@ def _render_invest_admin_like(*, inv_admin_ok_flag: bool, force_is_admin: bool, 
                     with c1:
                         reason = st.text_input("변동 사유", key=f"inv_reason_{p['product_id']}")
                     with c2:
-                        new_price = st.number_input(
-                            "주가",
+                        new_real_price = st.number_input(
+                            "실제주가",
                             min_value=0.0,
-                            max_value=999.9,
-                            step=0.1,
-                            format="%.1f",
-                            value=float(cur),
+                            max_value=9999999.99,
+                            step=0.01,
+                            format="%.2f",
+                            value=float(real_cur),
                             key=f"inv_price_{p['product_id']}",
                         )
+                        min_p = float(p.get("min_price", 0.0) or 0.0)
+                        max_p = float(p.get("max_price", 100.0) or 100.0)
+                        norm_preview = _normalize_to_100(new_real_price, min_p, max_p)
                     with c3:
                         save_btn = st.button("저장", use_container_width=True, key=f"inv_save_{p['product_id']}")
     
@@ -8726,14 +8958,22 @@ def _render_invest_admin_like(*, inv_admin_ok_flag: bool, force_is_admin: bool, 
                                     "product_id": p["product_id"],
                                     "reason": reason2,
                                     "price_before": _as_price1(cur),
-                                    "price_after": _as_price1(new_price),
+                                    "price_after": _as_price1(norm_preview),
+                                    "real_price_before": _as_price1(real_cur),
+                                    "real_price_after": _as_price1(new_real_price),
                                     "created_at": datetime.utcnow(),
                                 }
                                 db.collection(INV_HIST_COL).document().set(payload)
                                 db.collection(INV_PROD_COL).document(p["product_id"]).set(
-                                    {"current_price": _as_price1(new_price), "updated_at": datetime.utcnow()},
+                                    {
+                                        "real_price": _as_price1(new_real_price),
+                                        "current_price": _as_price1(norm_preview),
+                                        "updated_at": datetime.utcnow(),
+                                    },
                                     merge=True,
                                 )
+                                _get_history.clear()
+                                _get_products.clear()
                                 toast("주가가 반영되었습니다.", icon="✅")
                                 st.session_state[inv_reset_key] = True
                                 st.rerun()
@@ -8746,9 +8986,11 @@ def _render_invest_admin_like(*, inv_admin_ok_flag: bool, force_is_admin: bool, 
                         rows = []
                         for h in hist:
                             dt = _ts_to_dt(h.get("created_at"))
-                            pb = float(h.get("price_before", 0.0) or 0.0)
-                            pa = float(h.get("price_after", 0.0) or 0.0)
-                            diff = round(pa - pb, 1)
+                            pb = float(h.get("price_before", 0.0) or 0.0)  # 환산주가
+                            pa = float(h.get("price_after", 0.0) or 0.0)   # 환산주가
+                            rpb = float(h.get("real_price_before", pb) or 0.0)
+                            rpa = float(h.get("real_price_after", pa) or 0.0)
+                            diff = round(pa - pb, 2)
     
                             # 변동일시: 0월 0일(요일) 오전/오후 00시 00분
                             def _fmt_kor_datetime(dt_obj):
@@ -8766,9 +9008,9 @@ def _render_invest_admin_like(*, inv_admin_ok_flag: bool, force_is_admin: bool, 
     
                             # 주가 등락 표시 (요청: 하락은 파란 아이콘+파란 글씨)
                             if diff > 0:
-                                diff_view = f"<span style='color:red'>▲ +{diff:.1f}</span>"
+                                diff_view = f"<span style='color:red'>▲ +{diff:.2f}</span>"
                             elif diff < 0:
-                                diff_view = f"<span style='color:blue'>▼ {diff:.1f}</span>"
+                                diff_view = f"<span style='color:blue'>▼ {diff:.2f}</span>"
                             else:
                                 diff_view = "-"
     
@@ -8776,7 +9018,8 @@ def _render_invest_admin_like(*, inv_admin_ok_flag: bool, force_is_admin: bool, 
                                 {
                                     "변동일시": _fmt_kor_datetime(dt),
                                     "변동사유": h.get("reason", "") or "",
-                                    "주가": f"{pa:.1f}",          # ✅ '변동 후' → '주가'
+                                    "실제주가": f"{rpa:.2f}",
+                                    "환산주가": f"{pa:.2f}",
                                     "주가 등락": diff_view,
                                 }
                             )
@@ -8784,11 +9027,11 @@ def _render_invest_admin_like(*, inv_admin_ok_flag: bool, force_is_admin: bool, 
                         df = pd.DataFrame(rows)
     
                         # ✅ 표(왼쪽) + 꺾은선 그래프(오른쪽)
-                        left, right = st.columns([1.7, 2.2], gap="large")
+                        left, right = st.columns([1.7, 2.2], gap="large", vertical_alignment="top")
     
                         with left:
                             st.markdown(
-                                df.to_html(escape=False, index=False, classes="inv_hist_table"),
+                                f"<div class='inv_hist_table_wrap'>{df.to_html(escape=False, index=False, classes='inv_hist_table')}</div>",
                                 unsafe_allow_html=True,
                             )
     
@@ -8806,13 +9049,13 @@ def _render_invest_admin_like(*, inv_admin_ok_flag: bool, force_is_admin: bool, 
                             if init_price is None:
                                 init_price = float(p.get("current_price", 0.0) or 0.0)
     
-                            chart_rows.append({"변동사유": "시작주가", "변동 후": round(init_price, 1)})
-    
+                            chart_rows.append({"변동사유": "시작환산주가", "변동 후": round(init_price, 2)})
+                            
                             # ✅ 이후 변동(오래된→최신)
                             for h2 in reversed(hist):
                                 reason2 = str(h2.get("reason", "") or "").strip() or "-"
                                 pa2 = float(h2.get("price_after", 0.0) or 0.0)
-                                chart_rows.append({"변동사유": reason2, "변동 후": round(pa2, 1)})
+                                chart_rows.append({"변동사유": reason2, "변동 후": round(pa2, 2)})
     
                             cdf = pd.DataFrame(chart_rows)
     
@@ -8820,6 +9063,7 @@ def _render_invest_admin_like(*, inv_admin_ok_flag: bool, force_is_admin: bool, 
                                 order = cdf["변동사유"].tolist()
     
                                 chart_df = cdf.copy().reset_index(drop=True)
+                                y_min, y_max, y_ticks = _calc_nice_y_axis(chart_df["변동 후"].tolist(), target_ticks=6)
 
 
     
@@ -8920,8 +9164,9 @@ def _render_invest_admin_like(*, inv_admin_ok_flag: bool, force_is_admin: bool, 
                                         title=None,
 
     
-                                        scale=alt.Scale(domain=[50, 100]),
-
+                                        scale=alt.Scale(domain=[y_min, y_max]),
+                                        axis=alt.Axis(labelAngle=0, values=y_ticks),
+                                        
     
                                     ),
 
@@ -8981,8 +9226,9 @@ def _render_invest_admin_like(*, inv_admin_ok_flag: bool, force_is_admin: bool, 
                                         title=None,
 
     
-                                        scale=alt.Scale(domain=[50, 100]),
-
+                                        scale=alt.Scale(domain=[y_min, y_max]),
+                                        axis=alt.Axis(labelAngle=0, values=y_ticks),
+                                        
     
                                     ),
 
@@ -9012,9 +9258,10 @@ def _render_invest_admin_like(*, inv_admin_ok_flag: bool, force_is_admin: bool, 
                         rows = []
                         for h in hist:
                             dt = _ts_to_dt(h.get("created_at"))
-                            pb = float(h.get("price_before", 0.0) or 0.0)
-                            pa = float(h.get("price_after", 0.0) or 0.0)
-                            diff = round(pa - pb, 1)
+                            pb = float(h.get("price_before", 0.0) or 0.0)  # 환산주가
+                            pa = float(h.get("price_after", 0.0) or 0.0)   # 환산주가
+                            rpa = float(h.get("real_price_after", pa) or 0.0)
+                            diff = round(pa - pb, 2)
     
                             # 변동일시: 0월 0일(요일) 오전/오후 00시 00분
                             def _fmt_kor_datetime(dt_obj):
@@ -9032,9 +9279,9 @@ def _render_invest_admin_like(*, inv_admin_ok_flag: bool, force_is_admin: bool, 
     
                             # 주가 등락 표시 (요청: 하락은 파란 아이콘+파란 글씨)
                             if diff > 0:
-                                diff_view = f"<span style='color:red'>▲ +{diff:.1f}</span>"
+                                diff_view = f"<span style='color:red'>▲ +{diff:.2f}</span>"
                             elif diff < 0:
-                                diff_view = f"<span style='color:blue'>▼ {diff:.1f}</span>"
+                                diff_view = f"<span style='color:blue'>▼ {diff:.2f}</span>"
                             else:
                                 diff_view = "-"
     
@@ -9042,7 +9289,8 @@ def _render_invest_admin_like(*, inv_admin_ok_flag: bool, force_is_admin: bool, 
                                 {
                                     "변동일시": _fmt_kor_datetime(dt),
                                     "변동사유": h.get("reason", "") or "",
-                                    "주가": f"{pa:.1f}",          # ✅ '변동 후' → '주가'
+                                    "실제주가": f"{rpa:.2f}",
+                                    "환산주가": f"{pa:.2f}",
                                     "주가 등락": diff_view,
                                 }
                             )
@@ -9050,11 +9298,11 @@ def _render_invest_admin_like(*, inv_admin_ok_flag: bool, force_is_admin: bool, 
                         df = pd.DataFrame(rows)
     
                         # ✅ 표(왼쪽) + 꺾은선 그래프(오른쪽)
-                        left, right = st.columns([1.7,2.2], gap="large")
+                        left, right = st.columns([1.7,2.2], gap="large", vertical_alignment="top")
     
                         with left:
                             st.markdown(
-                                df.to_html(escape=False, index=False, classes="inv_hist_table"),
+                                f"<div class='inv_hist_table_wrap'>{df.to_html(escape=False, index=False, classes='inv_hist_table')}</div>",
                                 unsafe_allow_html=True,
                             )
     
@@ -9072,13 +9320,13 @@ def _render_invest_admin_like(*, inv_admin_ok_flag: bool, force_is_admin: bool, 
                             if init_price is None:
                                 init_price = float(p.get("current_price", 0.0) or 0.0)
     
-                            chart_rows.append({"변동사유": "시작주가", "변동 후": round(init_price, 1)})
-    
+                            chart_rows.append({"변동사유": "시작환산주가", "변동 후": round(init_price, 2)})
+                            
                             # ✅ 이후 변동(오래된→최신)
                             for h2 in reversed(hist):
                                 reason2 = str(h2.get("reason", "") or "").strip() or "-"
                                 pa2 = float(h2.get("price_after", 0.0) or 0.0)
-                                chart_rows.append({"변동사유": reason2, "변동 후": round(pa2, 1)})
+                                chart_rows.append({"변동사유": reason2, "변동 후": round(pa2, 2)})
     
                             cdf = pd.DataFrame(chart_rows)
     
@@ -9086,7 +9334,8 @@ def _render_invest_admin_like(*, inv_admin_ok_flag: bool, force_is_admin: bool, 
                                 order = cdf["변동사유"].tolist()
     
                                 chart_df = cdf.copy().reset_index(drop=True)
-
+                                y_min, y_max, y_ticks = _calc_nice_y_axis(chart_df["변동 후"].tolist(), target_ticks=6)
+                                
 
     
                                 # ✅ (PATCH) 구간별 상승/하락/보합 색상 + 점(회색) 표시
@@ -9186,8 +9435,9 @@ def _render_invest_admin_like(*, inv_admin_ok_flag: bool, force_is_admin: bool, 
                                         title=None,
 
     
-                                        scale=alt.Scale(domain=[50, 100]),
-
+                                        scale=alt.Scale(domain=[y_min, y_max]),
+                                        axis=alt.Axis(labelAngle=0, values=y_ticks),
+                                        
     
                                     ),
 
@@ -9247,8 +9497,9 @@ def _render_invest_admin_like(*, inv_admin_ok_flag: bool, force_is_admin: bool, 
                                         title=None,
 
     
-                                        scale=alt.Scale(domain=[50, 100]),
-
+                                        scale=alt.Scale(domain=[y_min, y_max]),
+                                        axis=alt.Axis(labelAngle=0, values=y_ticks),
+                                        
     
                                     ),
 
@@ -9277,6 +9528,9 @@ def _render_invest_admin_like(*, inv_admin_ok_flag: bool, force_is_admin: bool, 
     st.markdown("### 🧾 투자 상품 관리 장부")
     
     ledger_rows = _load_ledger(None if is_admin else my_student_id)
+
+    # ✅ 장부/지급 계산 기준을 "환산주가"로 고정 (관리자/학생 공통)
+    use_norm_price_for_ledger_and_redeem = True
     
     view_rows = []
     for x in ledger_rows:
@@ -9293,6 +9547,14 @@ def _render_invest_admin_like(*, inv_admin_ok_flag: bool, force_is_admin: bool, 
         redeem_amount_val = int(
             x.get("redeem_amount", x.get("redeemed_amount", 0)) or 0
         )
+
+        buy_price_norm = _as_price1(x.get("buy_price", 0.0))
+        buy_price_real = _as_price1(x.get("buy_real_price", buy_price_norm))
+        sell_price_norm = _as_price1(sell_price)
+        sell_price_real = _as_price1(x.get("sell_real_price", sell_price_norm))
+        diff_norm = _as_price1(diff_val)
+        diff_real = _as_price1(x.get("real_diff", diff_norm))
+        point_profit_pct = float(x.get("point_profit_pct", DEFAULT_POINT_PROFIT_PCT) or DEFAULT_POINT_PROFIT_PCT)
         
         view_rows.append(
             {
@@ -9300,12 +9562,13 @@ def _render_invest_admin_like(*, inv_admin_ok_flag: bool, force_is_admin: bool, 
                 "이름": str(x.get("name", "") or ""),
                 "종목": str(x.get("product_name", "") or ""),
                 "매입일자": str(x.get("buy_date_label", "") or ""),
-                "매입 주가": f"{_as_price1(x.get('buy_price', 0.0)):.1f}",
+                "매입 주가": f"{(buy_price_norm if use_norm_price_for_ledger_and_redeem else buy_price_real):.2f}",
+                "주가 1당 손익%": f"{point_profit_pct:.2f}%",
                 "투자 금액": int(x.get("invest_amount", 0) or 0),
                 "지급완료": "✅" if redeemed else "",
                 "매수일자": sell_date_label,
-                "매수 주가": f"{sell_price:.1f}" if redeemed else "",
-                "주가차이": f"{diff_val:.1f}" if redeemed else "",
+                "매수 주가": f"{(sell_price_norm if use_norm_price_for_ledger_and_redeem else sell_price_real):.2f}" if redeemed else "",
+                "주가차이": f"{(diff_norm if use_norm_price_for_ledger_and_redeem else diff_real):.2f}" if redeemed else "",
                 "수익/손실금": int(round(profit_val)) if redeemed else "",
                 "찾을 금액": redeem_amount_val if redeemed else "",
                 "_doc_id": x.get("_doc_id"),
@@ -9313,12 +9576,27 @@ def _render_invest_admin_like(*, inv_admin_ok_flag: bool, force_is_admin: bool, 
                 "_product_id": x.get("product_id"),
                 "_buy_price": x.get("buy_price"),
                 "_invest_amount": x.get("invest_amount"),
+                "_point_profit_pct": point_profit_pct,
             }
         )
     
     if view_rows:
-        st.dataframe(pd.DataFrame(view_rows).drop(columns=["_doc_id","_student_id","_product_id","_buy_price","_invest_amount"], errors="ignore"),
-                     use_container_width=True, hide_index=True)
+        st.dataframe(
+            pd.DataFrame(view_rows).drop(
+                columns=[
+                    "_doc_id",
+                    "_student_id",
+                    "_product_id",
+                    "_buy_price",
+                    "_buy_real_price",
+                    "_invest_amount",
+                    "_point_profit_pct",
+                ],
+                errors="ignore",
+            ),
+            use_container_width=True,
+            hide_index=True,
+        )
     else:
         st.caption("투자 내역이 없습니다.")
     
@@ -9342,17 +9620,22 @@ def _render_invest_admin_like(*, inv_admin_ok_flag: bool, force_is_admin: bool, 
                     pid = str(x.get("_product_id", "") or "")
                     buy_price = _as_price1(x.get("_buy_price", 0.0))
                     invest_amt = int(x.get("_invest_amount", 0) or 0)
+                    point_profit_pct = float(x.get("_point_profit_pct", DEFAULT_POINT_PROFIT_PCT) or DEFAULT_POINT_PROFIT_PCT)
                     prod_name = str(x.get("종목", "") or "")
 
                     # 현재 주가 찾기
                     cur_price = buy_price
+                    cur_real_price = buy_price
                     for p in products:
                         if str(p["product_id"]) == pid:
                             cur_price = _as_price1(p["current_price"])
+                            cur_real_price = _as_price1(p.get("real_price", cur_price))
                             break
 
-                    diff, profit, redeem_amt = _calc_redeem_amount(invest_amt, buy_price, cur_price)
-
+                    diff, profit, redeem_amt = _calc_redeem_amount(
+                        invest_amt, buy_price, cur_price, point_profit_pct=point_profit_pct
+                    )
+                    
                     c1, c2, c3, c4 = st.columns([1.2, 2.2, 2.8, 1.2], gap="small")
                     with c1:
                         st.markdown(f"**{x.get('번호','')}**")
@@ -9360,8 +9643,8 @@ def _render_invest_admin_like(*, inv_admin_ok_flag: bool, force_is_admin: bool, 
                         st.markdown(f"{x.get('이름','')}")
                         st.caption(prod_name)
                     with c3:
-                        st.caption(f"매입 {buy_price:.1f} → 현재 {cur_price:.1f} (차이 {diff:.1f})")
-                        st.caption(f"수익/손실 {profit:.1f} | 찾을 금액 {redeem_amt}")
+                        st.caption(f"매입 {buy_price:.2f} → 현재 {cur_price:.2f} (차이 {diff:.2f}, 주가 1당 손익 {point_profit_pct:.2f}%)")
+                        st.caption(f"수익/손실 {int(round(profit))} | 찾을 금액 {int(round(redeem_amt))}")
                     with c4:
                         st.markdown("<div style='text-align:center; opacity:0.65; padding-top:8px;'>지급대기</div>", unsafe_allow_html=True)
 
@@ -9377,17 +9660,22 @@ def _render_invest_admin_like(*, inv_admin_ok_flag: bool, force_is_admin: bool, 
                     pid = str(x.get("_product_id", "") or "")
                     buy_price = _as_price1(x.get("_buy_price", 0.0))
                     invest_amt = int(x.get("_invest_amount", 0) or 0)
+                    point_profit_pct = float(x.get("_point_profit_pct", DEFAULT_POINT_PROFIT_PCT) or DEFAULT_POINT_PROFIT_PCT)
                     prod_name = str(x.get("종목", "") or "")
 
                     # 현재 주가 찾기
                     cur_price = buy_price
+                    cur_real_price = buy_price
                     for p in products:
                         if str(p["product_id"]) == pid:
                             cur_price = _as_price1(p["current_price"])
+                            cur_real_price = _as_price1(p.get("real_price", cur_price))
                             break
 
-                    diff, profit, redeem_amt = _calc_redeem_amount(invest_amt, buy_price, cur_price)
-
+                    diff, profit, redeem_amt = _calc_redeem_amount(
+                        invest_amt, buy_price, cur_price, point_profit_pct=point_profit_pct
+                    )
+                    
                     c1, c2, c3, c4 = st.columns([1.2, 2.2, 2.8, 1.2], gap="small")
                     with c1:
                         st.markdown(f"**{x.get('번호','')}**")
@@ -9395,7 +9683,7 @@ def _render_invest_admin_like(*, inv_admin_ok_flag: bool, force_is_admin: bool, 
                         st.markdown(f"{x.get('이름','')}")
                         st.caption(prod_name)
                     with c3:
-                        st.caption(f"매입 {buy_price:.1f} → 현재 {cur_price:.1f} (차이 {diff:.1f})")
+                        st.caption(f"매입 {buy_price:.1f} → 현재 {cur_price:.1f} (차이 {diff:.1f}, 주가 1당 손익 {point_profit_pct:.2f}%)")
                         st.caption(f"수익/손실 {profit:.1f} | 찾을 금액 {redeem_amt}")
                     with c4:
                         if st.button("지급", use_container_width=True, key=f"inv_pay_{doc_id}"):
@@ -9430,8 +9718,10 @@ def _render_invest_admin_like(*, inv_admin_ok_flag: bool, force_is_admin: bool, 
                                             "redeemed_at": datetime.utcnow(),
                                             "sell_date_label": sell_label,
                                             "sell_price": _as_price1(cur_price),
+                                            "sell_real_price": _as_price1(cur_real_price),
                                             "diff": _as_price1(diff),
-                                            "profit": float(profit),
+                                            "real_diff": _as_price1(diff),
+                                            "profit": int(round(profit)),
                                             "redeem_amount": int(redeem_amt),
 
                                             # 구버전 키와도 함께 저장(하위 호환)                                            
@@ -9466,11 +9756,31 @@ def _render_invest_admin_like(*, inv_admin_ok_flag: bool, force_is_admin: bool, 
         elif not products:
             st.info("투자 종목이 아직 없어요. 관리자에게 종목 추가를 요청해 주세요.")
         else:
-            prod_labels = [f"{p['name']} (현재 {p['current_price']:.1f})" for p in products]
-            by_label = {lab: p for lab, p in zip(prod_labels, products)}
-    
-            sel_lab = st.selectbox("투자 종목 선택", prod_labels, key="inv_user_sel_prod")
-            sel_prod = by_label.get(sel_lab)
+            prod_choices = [(str(p["product_id"]), f"{p['name']} (현재 {p['current_price']:.2f})") for p in products]
+            product_by_id = {str(p["product_id"]): p for p in products}
+            labels = [lab for _, lab in prod_choices]
+            pid_by_label = {lab: pid for pid, lab in prod_choices}
+
+            def _on_inv_user_product_change():
+                selected_label = st.session_state.get("inv_user_sel_prod_ui")
+                st.session_state["inv_user_selected_product_id"] = pid_by_label.get(selected_label)
+
+            default_pid = st.session_state.get("inv_user_selected_product_id")
+            if default_pid not in product_by_id:
+                default_pid = prod_choices[0][0]
+                st.session_state["inv_user_selected_product_id"] = default_pid
+
+            default_label = next((lab for pid, lab in prod_choices if pid == default_pid), labels[0])
+            if st.session_state.get("inv_user_sel_prod_ui") not in labels:
+                st.session_state["inv_user_sel_prod_ui"] = default_label
+
+            st.selectbox(
+                "투자 종목 선택",
+                labels,
+                key="inv_user_sel_prod_ui",
+                on_change=_on_inv_user_product_change,
+            )
+            sel_prod = product_by_id.get(st.session_state.get("inv_user_selected_product_id"), products[0])
     
             amt = st.number_input("투자 금액", min_value=0, step=10, value=0, key="inv_user_amt")
             if st.button("투자하기 (다음 확인창에서 ‘예’를 눌러야 완료, 신중하게 결정하기)", use_container_width=True, key="inv_user_btn"):
@@ -9507,6 +9817,8 @@ def _render_invest_admin_like(*, inv_admin_ok_flag: bool, force_is_admin: bool, 
                                         "buy_at": datetime.utcnow(),
                                         "buy_date_label": buy_label,
                                         "buy_price": _as_price1(sel_prod["current_price"]),
+                                        "buy_real_price": _as_price1(sel_prod.get("real_price", sel_prod["current_price"])),
+                                        "point_profit_pct": float(sel_prod.get("point_profit_pct", DEFAULT_POINT_PROFIT_PCT) or DEFAULT_POINT_PROFIT_PCT),
                                         "invest_amount": int(amt),
                                         "redeemed": False,
                                     }
@@ -9544,29 +9856,78 @@ def _render_invest_admin_like(*, inv_admin_ok_flag: bool, force_is_admin: bool, 
                     cur_obj = p
                     break
     
-        name_default = "" if cur_obj is None else cur_obj["name"]
-        price_default = 0.0 if cur_obj is None else float(cur_obj["current_price"])
+        st.session_state.setdefault("inv_admin_edit_prev", "(신규 추가)")
+        st.session_state.setdefault("inv_admin_name", "")
+        st.session_state.setdefault("inv_admin_real_price", 0.0)
+        st.session_state.setdefault("inv_admin_min_price", 0.0)
+        st.session_state.setdefault("inv_admin_max_price", 100.0)
+        st.session_state.setdefault("inv_admin_point_profit_pct", DEFAULT_POINT_PROFIT_PCT)
+        
+        if st.session_state.get("inv_admin_edit_prev") != sel:
+            if cur_obj is None:
+                st.session_state["inv_admin_name"] = ""
+                st.session_state["inv_admin_real_price"] = 0.0
+                st.session_state["inv_admin_min_price"] = 0.0
+                st.session_state["inv_admin_max_price"] = 100.0
+                st.session_state["inv_admin_point_profit_pct"] = DEFAULT_POINT_PROFIT_PCT
+            else:
+                st.session_state["inv_admin_name"] = str(cur_obj.get("name", "") or "")
+                st.session_state["inv_admin_real_price"] = float(cur_obj.get("real_price", cur_obj.get("current_price", 0.0)) or 0.0)
+                st.session_state["inv_admin_min_price"] = float(cur_obj.get("min_price", 0.0) or 0.0)
+                st.session_state["inv_admin_max_price"] = float(cur_obj.get("max_price", 100.0) or 100.0)
+                st.session_state["inv_admin_point_profit_pct"] = float(cur_obj.get("point_profit_pct", DEFAULT_POINT_PROFIT_PCT) or DEFAULT_POINT_PROFIT_PCT)
+            st.session_state["inv_admin_edit_prev"] = sel
     
-        c1, c2 = st.columns([2.2, 1.2], gap="small")
+        c1, c2, c3, c4, c5 = st.columns([1.8, 1.0, 1.0, 1.2, 1.2], gap="small")
         with c1:
-            new_name = st.text_input("투자 종목명", value=name_default, key="inv_admin_name")
+            new_name = st.text_input("투자 종목명", key="inv_admin_name")
         with c2:
-            new_price = st.number_input(
-                "초기/현재 주가",
+            new_min_price = st.number_input(
+                "최하값",
                 min_value=0.0,
-                max_value=999.9,
-                step=0.1,
-                format="%.1f",
-                value=float(price_default),
-                key="inv_admin_price",
+                max_value=9999999.99,
+                step=0.01,
+                format="%.2f",
+                key="inv_admin_min_price",
             )
-    
+        with c3:
+            new_max_price = st.number_input(
+                "최대값",
+                min_value=0.0,
+                max_value=9999999.99,
+                step=0.01,
+                format="%.2f",
+                key="inv_admin_max_price",
+            )
+        with c4:
+            new_real_price = st.number_input(
+                "초기/현재 실제주가",
+                min_value=0.0,
+                max_value=9999999.99,
+                step=0.01,
+                format="%.2f",
+                key="inv_admin_real_price",
+            )
+        with c5:
+            new_point_profit_pct = st.number_input(
+                "주가 1당 손익 %",
+                min_value=0.0,
+                max_value=1000.0,
+                step=0.01,
+                format="%.2f",
+                key="inv_admin_point_profit_pct",
+            )
+        new_norm_price = _normalize_to_100(new_real_price, new_min_price, new_max_price)
+        st.caption(f"환산주가(자동): {new_norm_price:.2f} / 100")
+
         b1, b2 = st.columns(2)
         with b1:
             if st.button("저장", use_container_width=True, key="inv_admin_save"):
                 nm = str(new_name or "").strip()
                 if not nm:
                     st.warning("종목명을 입력해 주세요.")
+                elif float(new_max_price) <= float(new_min_price):
+                    st.warning("최대값은 최하값보다 크게 입력해 주세요.")
                 else:
                     # ✅ 중복 종목명 방지(공백/대소문자 무시)
                     nm_key = nm.replace(" ", "").lower()
@@ -9590,12 +9951,17 @@ def _render_invest_admin_like(*, inv_admin_ok_flag: bool, force_is_admin: bool, 
                                 db.collection(INV_PROD_COL).document(dup["product_id"]).set(
                                     {
                                         "name": nm,
-                                        "current_price": _as_price1(new_price),
+                                        "min_price": _as_price1(new_min_price),
+                                        "max_price": _as_price1(new_max_price),
+                                        "real_price": _as_price1(new_real_price),
+                                        "current_price": _as_price1(new_norm_price),
+                                        "point_profit_pct": float(new_point_profit_pct),
                                         "is_active": True,
                                         "updated_at": datetime.utcnow(),
                                     },
                                     merge=True,
                                 )
+                                _get_products.clear()
                                 toast("삭제된 종목을 복구했습니다.", icon="♻️")
                                 st.rerun()
                             except Exception as e:
@@ -9612,23 +9978,33 @@ def _render_invest_admin_like(*, inv_admin_ok_flag: bool, force_is_admin: bool, 
                             db.collection(INV_PROD_COL).document().set(
                                 {
                                     "name": nm,
-                                    "current_price": _as_price1(new_price),
+                                    "min_price": _as_price1(new_min_price),
+                                    "max_price": _as_price1(new_max_price),
+                                    "real_price": _as_price1(new_real_price),
+                                    "current_price": _as_price1(new_norm_price),
+                                    "point_profit_pct": float(new_point_profit_pct),
                                     "is_active": True,
                                     "created_at": datetime.utcnow(),
                                     "updated_at": datetime.utcnow(),
                                 }
                             )
+                            _get_products.clear()
                             toast("종목이 추가되었습니다.", icon="✅")
                         else:
                             db.collection(INV_PROD_COL).document(cur_obj["product_id"]).set(
                                 {
                                     "name": nm,
-                                    "current_price": _as_price1(new_price),
+                                    "min_price": _as_price1(new_min_price),
+                                    "max_price": _as_price1(new_max_price),
+                                    "real_price": _as_price1(new_real_price),
+                                    "current_price": _as_price1(new_norm_price),
+                                    "point_profit_pct": float(new_point_profit_pct),
                                     "is_active": True,
                                     "updated_at": datetime.utcnow(),
                                 },
                                 merge=True,
                             )
+                            _get_products.clear()
                             toast("종목이 수정되었습니다.", icon="✅")
                         st.rerun()
                     except Exception as e:
@@ -9642,6 +10018,7 @@ def _render_invest_admin_like(*, inv_admin_ok_flag: bool, force_is_admin: bool, 
                         {"is_active": False, "updated_at": datetime.utcnow()},
                         merge=True,
                     )
+                    _get_products.clear()
                     toast("삭제(비활성화) 완료", icon="🗑️")
                     st.rerun()
                 except Exception as e:
@@ -12223,6 +12600,7 @@ if "🏛️ 국세청(국고)" in tabs:
 
 
         # 4) 국고 템플릿 추가/수정/삭제 (국고 전용)
+        render_template_section_divider()        
         st.markdown("### 🧩 국고 템플릿 추가/수정/삭제")
 
         tpls = api_list_treasury_templates_cached().get("templates", [])
@@ -12259,19 +12637,14 @@ if "🏛️ 국세청(국고)" in tabs:
 
         f1, f2, f3, f4 = st.columns([2.2, 1.2, 1.2, 1.0])
         with f1:
-            lab_in = st.text_input("라벨(내역)", value=(edit_tpl.get("label") if edit_tpl else ""), key="tre_tpl_label").strip()
+            lab_in = st.text_input("라벨(내역)", key="tre_tpl_label").strip()
         with f2:
             # ✅ 화면에는 한글(세입/세출)로, 저장은 income/expense 그대로
             kind_map = {"세입": "income", "세출": "expense"}
-            kind_rev = {v: k for k, v in kind_map.items()}
-
-            cur_kind = (edit_tpl.get("kind") if edit_tpl else "income")
-            cur_kind_kr = kind_rev.get(str(cur_kind), "세입")
 
             kind_kr = st.selectbox(
                 "종류",
                 ["세입", "세출"],
-                index=(0 if cur_kind_kr == "세입" else 1),
                 key="tre_tpl_kind_kr",
                 help="세입=income, 세출=expense (저장은 자동으로 처리됩니다)",
             )
@@ -12279,9 +12652,9 @@ if "🏛️ 국세청(국고)" in tabs:
             # ✅ 아래 저장 버튼에서 kind_in을 그대로 쓰도록, 변수명 kind_in 유지
             kind_in = kind_map.get(kind_kr, "income")
         with f3:
-            amt_in = st.number_input("금액", min_value=0, step=1, value=int(edit_tpl.get("amount", 0)) if edit_tpl else 0, key="tre_tpl_amount")
+            amt_in = st.number_input("금액", min_value=0, step=1, key="tre_tpl_amount")
         with f4:
-            ord_in = st.number_input("순서", min_value=1, step=1, value=int(edit_tpl.get("order", 1)) if edit_tpl else 1, key="tre_tpl_order")
+            ord_in = st.number_input("순서", min_value=1, step=1, key="tre_tpl_order")
 
         b1, b2, b3 = st.columns(3)
         with b1:
@@ -12538,7 +12911,6 @@ if "📊 통계청" in tabs:
             st.session_state["stat_add_tpl_prev"] = stat_pick
             if stat_pick != "(직접 입력)":
                 st.session_state["stat_add_label"] = stat_pick
-            st.rerun()
 
         add_c1, add_c2 = st.columns([3.0, 1.0])
         with add_c1:
@@ -13153,6 +13525,7 @@ div[data-testid="stElementContainer"]:has(.stat_bulk_text){
         # -------------------------
         # (하단) 통계표 템플릿 추가/수정/삭제
         # -------------------------
+        render_template_section_divider()
         st.markdown("### 🧩 통계표 템플릿 추가/수정/삭제")
 
         tpl_items = api_list_stat_templates_cached().get("templates", [])
@@ -13182,9 +13555,9 @@ div[data-testid="stElementContainer"]:has(.stat_bulk_text){
 
         t1, t2 = st.columns([3.0, 1.0])
         with t1:
-            tpl_label_in = st.text_input("템플릿 내역", value=(edit_tpl.get("label") if edit_tpl else ""), key="stat_tpl_label").strip()
+            tpl_label_in = st.text_input("템플릿 내역", key="stat_tpl_label").strip()
         with t2:
-            tpl_order_in = st.number_input("순서", min_value=1, step=1, value=int(edit_tpl.get("order", 1)) if edit_tpl else 1, key="stat_tpl_order")
+            tpl_order_in = st.number_input("순서", min_value=1, step=1, key="stat_tpl_order")
 
         bb1, bb2, bb3 = st.columns(3)
         with bb1:
@@ -13304,6 +13677,35 @@ if "💳 신용등급" in tabs:
                     st.rerun()
 
         # -------------------------
+        # 2-1) 관리자 개별 신용점수 조정(+/-)
+        # -------------------------
+        def _list_credit_adjustments(limit: int = 300):
+            out = []
+            q = (
+                db.collection("credit_adjustments")
+                .order_by("created_at", direction=mongo.Query.DESCENDING)
+                .limit(int(limit))
+                .stream()
+            )
+            for d in q:
+                x = d.to_dict() or {}
+                out.append(
+                    {
+                        "adjustment_id": d.id,
+                        "created_at": x.get("created_at"),
+                        "student_id": str(x.get("student_id", "") or ""),
+                        "student_no": int(x.get("student_no", 0) or 0),
+                        "student_name": str(x.get("student_name", "") or ""),
+                        "delta": int(x.get("delta", 0) or 0),
+                        "score_after": int(x.get("score_after", 0) or 0),
+                        "grade_after": int(x.get("grade_after", 0) or 0),
+                        "recorder": str(x.get("recorder", "") or "관리자"),
+                    }
+                )
+            return out
+
+
+        # -------------------------
         # 3) 통계청 제출물(열) 로드 → 누적 점수 계산
         # -------------------------
         sub_res = api_list_stat_submissions_cached(limit_cols=60)
@@ -13364,6 +13766,11 @@ if "💳 신용등급" in tabs:
                     snap_map[stid] = nxt
     
                 scores_by_sub[sub_id] = snap_map
+
+            manual_delta_map = {}
+            for stx in stu_rows:
+                stid = str(stx["student_id"])
+                manual_delta_map[stid] = _sum_manual_credit_delta(stid)            
     
             # -------------------------
             # (PATCH) 가로 페이징 (통계청과 동일 로직)
@@ -13526,7 +13933,12 @@ if "💳 신용등급" in tabs:
                         sc = int(scores_by_sub[sub_id].get(stid, base))
                     else:
                         sc = int(base)
-    
+                    sc = int(sc + manual_delta_map.get(stid, 0))
+                    if sc > 100:
+                        sc = 100
+                    if sc < 0:
+                        sc = 0
+                    
                     gr = _score_to_grade(sc)
     
                     with row_cols[j + 2]:
@@ -13597,6 +14009,94 @@ if "💳 신용등급" in tabs:
                     return f"{dt.month}월 {dt.day}일({wd})"
                 except Exception:
                     return ""
+                    
+
+        # -------------------------
+        # (관리자) 신용점수 수동 조정/조정 장부 - 탭 최하단 배치
+        # -------------------------
+        if bool(is_admin):
+            st.markdown("### ✍️ 신용점수 수동 조정")
+            if not stu_rows:
+                st.info("활성 학생이 없어 신용점수 수동 조정을 할 수 없습니다.")
+            else:
+                aa1, aa2, aa3, aa4 = st.columns([1.8, 1, 1, 1.1])
+                with aa1:
+                    pick_names = [f"{int(s['no'])}번 {s['name']}" for s in stu_rows]
+                    pick_idx = st.selectbox(
+                        "학생 선택",
+                        options=list(range(len(stu_rows))),
+                        format_func=lambda i: pick_names[i],
+                        key="credit_adj_student_idx",
+                    )
+                with aa2:
+                    sign = st.selectbox("점수 +/-", options=["+", "-"], key="credit_adj_sign")
+                with aa3:
+                    pts = st.number_input("점수", min_value=1, max_value=100, value=1, step=1, key="credit_adj_pts")
+                with aa4:
+                    st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+                    save_adj = st.button(
+                        "저장",
+                        key="credit_adj_save_btn",
+                        use_container_width=True,
+                    )
+                if save_adj:
+                    target = stu_rows[int(pick_idx)]
+                    stid = str(target["student_id"])
+                    signed_delta = int(pts if sign == "+" else -pts)
+                    before_score, _ = _calc_credit_score_for_student(stid)
+                    after_score = int(before_score + signed_delta)
+                    if after_score > 100:
+                        after_score = 100
+                    if after_score < 0:
+                        after_score = 0
+                    after_grade = _score_to_grade(after_score)
+
+                    db.collection("credit_adjustments").document().set(
+                        {
+                            "student_id": stid,
+                            "student_no": int(target["no"]),
+                            "student_name": str(target["name"]),
+                            "delta": int(signed_delta),
+                            "score_before": int(before_score),
+                            "score_after": int(after_score),
+                            "grade_after": int(after_grade),
+                            "recorder": "관리자",
+                            "created_at": datetime.utcnow(),
+                        }
+                    )
+                    db.collection("students").document(stid).set(
+                        {
+                            "credit_score": int(after_score),
+                            "credit_grade": int(after_grade),
+                            "updated_at": datetime.utcnow(),
+                        },
+                        merge=True,
+                    )
+                    toast(f"신용점수 조정 저장 완료 ({signed_delta:+d}점)", icon="✅")
+                    st.rerun()
+
+            st.markdown("### 📒 신용점수 조정 장부")
+            adj_rows = _list_credit_adjustments(limit=300)
+            if not adj_rows:
+                st.info("아직 수동 조정 장부가 없습니다.")
+            else:
+                led_view = []
+                for r in adj_rows:
+                    dt_utc = _to_utc_datetime(r.get("created_at"))
+                    dt_disp = format_kr_datetime_no_year(dt_utc.astimezone(KST)) if dt_utc else ""
+                    led_view.append(
+                        {
+                            "일시": dt_disp,
+                            "대상": f"{int(r.get('student_no', 0))}번 {str(r.get('student_name', '') or '')}",
+                            "점수기록": f"{int(r.get('delta', 0)):+d}점 (결과: {int(r.get('score_after', 0))}점/{int(r.get('grade_after', 0))}등급)",
+                            "기록자": str(r.get("recorder", "") or "관리자"),
+                        }
+                    )
+                st.dataframe(
+                    pd.DataFrame(led_view),
+                    use_container_width=True,
+                    hide_index=True,
+                )        
 
 
 # =========================
@@ -14307,6 +14807,7 @@ def _render_mart_user_ui(login_name: str, login_pin: str, my_student_id: str):
             st.error(res.get("error", "저장 실패"))
 
 
+@fragment_if_available
 def _render_mart_admin_ui():
     st.markdown("#### 🚦 구입 제한 설정")
     cfg = api_get_mart_config()
@@ -15121,7 +15622,7 @@ if "🧾 로그기록" in tabs:
             st.caption("모든 탭의 변경 이력을 분리 없이 하나의 표로 통합해 보여줍니다.")
 
             # ✅ 요청 반영: 탭별 분리 없이 '단일 통합표'만 제공
-            max_log_rows = st.number_input("표시 행 수", min_value=50, max_value=10000, value=50, step=50, key="audit_max_rows")
+            max_log_rows = st.number_input("표시 행 수", min_value=100, max_value=10000, value=3000, step=100, key="audit_max_rows")
             all_rows = _build_activity_log_rows(limit_per_source=800, max_rows=int(max_log_rows))
             if not all_rows:
                 st.info("표시할 로그가 없습니다.")
@@ -15142,27 +15643,6 @@ if "🧾 로그기록" in tabs:
                 if not df_logs.empty:
                     df_logs = df_logs.reset_index(drop=True)
                     df_logs.insert(0, "번호", df_logs.index + 1)
-                    # ✅ 입/출금 값이 모두 없는(0/빈값) 행은 '-'로 표시
-                    def _is_zero_like(v) -> bool:
-                        try:
-                            return float(v) == 0.0
-                        except Exception:
-                            return str(v or "").strip() in ("", "-", "0", "0.0")
-
-                    def _to_dash_if_empty(v):
-                        if pd.isna(v):
-                            return "-"
-                        if str(v).strip() == "":
-                            return "-"
-                        return v
-
-                    no_io_mask = df_logs.apply(
-                        lambda r: _is_zero_like(r.get("입금", 0)) and _is_zero_like(r.get("출금", 0)),
-                        axis=1,
-                    )
-                    df_logs.loc[no_io_mask, "입금"] = "-"
-                    df_logs.loc[no_io_mask, "출금"] = "-"
-                    df_logs["변경후잔액"] = df_logs["변경후잔액"].apply(_to_dash_if_empty)                    
                 st.dataframe(
                     df_logs[
                         [
