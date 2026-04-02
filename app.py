@@ -2073,9 +2073,7 @@ def api_add_tx(name, pin, memo, deposit, withdraw):
         snap = student_ref.get(transaction=transaction)
         bal = int((snap.to_dict() or {}).get("balance", 0) or 0)
 
-        # 출금은 잔액 부족이면 불가
-        if tx_type == "withdraw" and bal < withdraw:
-            raise ValueError("잔액보다 큰 출금은 불가합니다.")
+        # ✅ 관리자 출금은 잔액 부족이어도 허용(벌금 등 음수 잔액 반영)
 
         new_bal = int(bal + amount)
         transaction.update(student_ref, {"balance": int(new_bal)})
@@ -2141,9 +2139,7 @@ def api_admin_add_tx_by_student_id(
             raise ValueError("계정을 찾지 못했습니다.")
         bal = int((snap.to_dict() or {}).get("balance", 0) or 0)
 
-        # 출금은 잔액 부족이면 불가
-        if tx_type == "withdraw" and bal < withdraw:
-            raise ValueError("잔액보다 큰 출금은 불가합니다.")
+        # ✅ 관리자 출금은 잔액 부족이어도 허용(벌금 등 음수 잔액 반영)
 
         new_bal = int(bal + amount)
         transaction.update(student_ref, {"balance": int(new_bal)})
