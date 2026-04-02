@@ -3183,9 +3183,8 @@ def api_add_tx_with_treasury(name, pin, memo, deposit, withdraw, apply_treasury:
         snap = student_ref.get(transaction=transaction)
         bal = int((snap.to_dict() or {}).get("balance", 0))
 
-        # 일반 출금은 잔액 부족이면 불가
-        if tx_type == "withdraw" and bal < withdraw:
-            raise ValueError("잔액보다 큰 출금은 불가합니다.")
+        # ✅ 관리자 모드(💰입금/출금): 출금 시 잔액 부족이어도 허용
+        #    (벌금 등으로 통장 음수 반영이 필요)
 
         # ✅ 국고 반영(같은 트랜잭션) - 반드시 WRITE(학생/tx) 전에 처리(READ 먼저!)
         if tre_signed != 0:
