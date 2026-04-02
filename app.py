@@ -4146,6 +4146,33 @@ def api_get_latest_closed_auction_round():
             
     return {"ok": False, "error": "마감된 경매가 없습니다."}
 
+def api_list_closed_auction_rounds(limit: int = 30):
+    docs = []
+    try:
+        q = (
+            db.collection("auction_rounds")
+            .where(filter=build_filter("status", "==", "closed"))
+            .order_by("round_no", direction=mongo.Query.DESCENDING)
+            .limit(int(limit))
+            .stream()
+        )
+        docs = list(q)
+    except Exception:
+        docs = list(
+            db.collection("auction_rounds")
+            .where(filter=build_filter("status", "==", "closed"))
+            .stream()
+        )
+
+    rows = []
+    for d in docs:
+        row = d.to_dict() or {}
+        row["round_id"] = d.id
+        rows.append(row)
+
+    rows.sort(key=lambda x: int(x.get("round_no", 0) or 0), reverse=True)
+    return {"ok": True, "rows": rows[: int(limit)]}
+
 def api_apply_auction_ledger(admin_pin: str, round_id: str, refund_non_winners: bool = False):
     if not is_admin_pin(admin_pin):
         return {"ok": False, "error": "관리자 PIN이 틀립니다."}
@@ -4749,6 +4776,30 @@ def api_submit_lottery_entries(name: str, pin: str, games: list[list[int]]):
         return {"ok": False, "error": str(e)}
     except Exception as e:
         return {"ok": False, "error": f"복권 구매 실패: {e}"}
+
+def api_list_closed_lottery_rounds(limit: int = 50):
+    docs = []
+    try:
+        q = (
+            db.collection("lottery_rounds")
+            .order_by("round_no", direction=mongo.Query.DESCENDING)
+            .limit(int(limit))
+            .stream()
+        )
+        docs = list(q)
+    except Exception:
+        docs = list(db.collection("lottery_rounds").stream())
+
+    rows = []
+    for d in docs:
+        row = d.to_dict() or {}
+        status = str(row.get("status", "") or "")
+        if status in ("closed", "drawn"):
+            row["round_id"] = d.id
+            rows.append(row)
+
+    rows.sort(key=lambda x: int(x.get("round_no", 0) or 0), reverse=True)
+    return {"ok": True, "rows": rows[: int(limit)]}
 
 def _generate_admin_lottery_numbers(game_count: int) -> list[list[int]]:
     games = []
@@ -15191,6 +15242,41 @@ if "🏷️ 경매" in tabs:
                                     st.rerun()
                                 else:
                                     st.error(res.get("error", "장부 반영 실패"))
+
+            st.markdown("---")
+            st.caption("지난 마감 경매 조회")
+            closed_list_res = api_list_closed_auction_rounds(limit=50)
+            closed_round_rows = list(closed_list_res.get("rows", []) or [])
+            if closed_round_rows:
+                auc_options = {
+                    f"{int(r.get('round_no', 0) or 0):02d}회 | {str(r.get('bid_name', '') or '')}": r
+                    for r in closed_round_rows
+                }
+                auc_label = st.selectbox(
+                    "마감된 경매 회차 선택",
+                    options=list(auc_options.keys()),
+                    key="auc_closed_round_pick",
+                )
+                sel_round = auc_options.get(auc_label, {})
+                sel_round_id = str(sel_round.get("round_id", "") or "")
+                if sel_round_id:
+                    past_bid_res = api_list_auction_bids(sel_round_id)
+                    past_bid_rows = list(past_bid_res.get("rows", []) or [])
+                    past_view_rows = [
+                        {
+                            "입찰 가격": int(r.get("amount", 0) or 0),
+                            "입찰일시": str(r.get("submitted_at_text", "") or ""),
+                            "번호": int(r.get("student_no", 0) or 0),
+                            "이름": str(r.get("student_name", "") or ""),
+                        }
+                        for r in past_bid_rows
+                    ]
+                    if past_view_rows:
+                        st.dataframe(pd.DataFrame(past_view_rows), use_container_width=True, hide_index=True)
+                    else:
+                        st.info("선택한 회차에 제출된 입찰표가 없습니다.")
+            else:
+                st.info("조회 가능한 마감 경매가 없습니다.")            
                                     
             st.markdown("### 📚 경매 관리 장부")
             led = api_list_auction_admin_ledger(limit=100)
@@ -15421,7 +15507,60 @@ if "🍀 복권" in tabs:
                     st.info(lot_result_gate_msg)
             else:
                 st.info(lot_result_gate_msg)
-                
+
+            st.markdown("---")
+            st.caption("지난 마감 복권 참여 결과 조회")
+            closed_lot_res = api_list_closed_lottery_rounds(limit=80)
+            closed_lot_rows = list(closed_lot_res.get("rows", []) or [])
+            if closed_lot_rows:
+                lot_options = {f"{int(r.get('round_no', 0) or 0)}회": r for r in closed_lot_rows}
+                lot_label = st.selectbox(
+                    "마감된 복권 회차 선택",
+                    options=list(lot_options.keys()),
+                    key="lot_closed_round_pick",
+                )
+                lot_round = lot_options.get(lot_label, {})
+                lot_round_id = str(lot_round.get("round_id", "") or "")
+                if lot_round_id:
+                    lot_ent_res = api_list_lottery_entries(lot_round_id)
+                    lot_ent_rows = list(lot_ent_res.get("rows", []) or [])
+                    if lot_ent_rows:
+                        lot_ticket_price = int(lot_round.get("ticket_price", 0) or 0)
+                        participant_keys = set()
+                        for r in lot_ent_rows:
+                            sid = str(r.get("student_id", "") or "").strip()
+                            if sid:
+                                participant_keys.add(f"sid:{sid}")
+                                continue
+                            sno = int(r.get("student_no", 0) or 0)
+                            sname = str(r.get("student_name", "") or "").strip()
+                            if sno > 0:
+                                participant_keys.add(f"sno:{sno}")
+                            elif sname:
+                                participant_keys.add(f"name:{sname}")
+
+                        past_summary_rows = [{
+                            "참여자수": int(len(participant_keys)),
+                            "참여 복권수": int(len(lot_ent_rows)),
+                            "총 액수": int(len(lot_ent_rows) * lot_ticket_price),
+                        }]
+                        st.dataframe(pd.DataFrame(past_summary_rows), use_container_width=True, hide_index=True)
+
+                        past_lot_rows = [
+                            {
+                                "참여 일시": str(r.get("submitted_at_text", "") or ""),
+                                "번호": int(r.get("student_no", 0) or 0),
+                                "이름": str(r.get("student_name", "") or ""),
+                                "복권 참여 번호": str(r.get("numbers_text", "") or ""),
+                            }
+                            for r in lot_ent_rows
+                        ]
+                        st.dataframe(pd.DataFrame(past_lot_rows), use_container_width=True, hide_index=True)
+                    else:
+                        st.info("선택한 회차의 참여 결과가 없습니다.")
+            else:
+                st.info("조회 가능한 마감 복권 회차가 없습니다.")
+            
             st.markdown("### 🎰 복권 추첨하기")
             d1, d2, d3, d4 = st.columns(4)
             with d1:
