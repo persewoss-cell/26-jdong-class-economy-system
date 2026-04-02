@@ -10429,10 +10429,17 @@ div[data-testid="stDataFrame"] * { font-size: 0.80rem !important; }
                 for r in sav_rows:
                     start_dt = _parse_iso_to_dt(r.get("start_utc", "") or "")
                     mat_dt = _parse_iso_to_dt(r.get("maturity_utc", "") or "")
+                    cancel_dt = _parse_iso_to_dt(
+                        r.get("processed_at") or r.get("updated_at") or r.get("canceled_at") or ""
+                    )
 
                     status = str(r.get("status", "running") or "running")
                     if status == "canceled":
-                        result = "중도해지"
+                        if cancel_dt:
+                            cancel_kst = cancel_dt.astimezone(KST)
+                            result = f"중도해지({cancel_kst.month:02d}.{cancel_kst.day:02d}.)"
+                        else:
+                            result = "중도해지"
                     else:
                         if mat_dt and mat_dt <= now_utc:
                             result = "만기"
@@ -14525,10 +14532,17 @@ div[data-testid="stDataFrame"] * { font-size: 0.80rem !important; }
                 for r in sav_rows:
                     start_dt = _parse_iso_to_dt(r.get("start_utc", "") or "")
                     mat_dt = _parse_iso_to_dt(r.get("maturity_utc", "") or "")
+                    cancel_dt = _parse_iso_to_dt(
+                        r.get("processed_at") or r.get("updated_at") or r.get("canceled_at") or ""
+                    )
 
                     status = str(r.get("status", "running") or "running")
                     if status == "canceled":
-                        result = "중도해지"
+                        if cancel_dt:
+                            cancel_kst = cancel_dt.astimezone(KST)
+                            result = f"중도해지({cancel_kst.month:02d}.{cancel_kst.day:02d}.)"
+                        else:
+                            result = "중도해지"
                     else:
                         if mat_dt and mat_dt <= now_utc:
                             result = "만기"
