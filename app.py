@@ -15272,7 +15272,7 @@ if "🏷️ 경매" in tabs:
                     for r in closed_round_rows
                 }
                 auc_label = st.selectbox(
-                    "마감된 경매 조회",
+                    "🔎 마감된 경매 결과 조회",
                     options=[auc_empty_label] + list(auc_options.keys()),
                     key="auc_closed_round_pick",
                 )
@@ -15534,7 +15534,7 @@ if "🍀 복권" in tabs:
                 lot_empty_label = "(선택없음)"
                 lot_options = {f"{int(r.get('round_no', 0) or 0)}회": r for r in closed_lot_rows}
                 lot_label = st.selectbox(
-                    "마감된 복권 결과 조회",
+                    "🔎 마감된 복권 결과 조회",
                     options=[lot_empty_label] + list(lot_options.keys()),
                     key="lot_closed_round_pick",
                 )
