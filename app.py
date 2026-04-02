@@ -14925,23 +14925,25 @@ def _render_mart_admin_ui():
             else:
                 st.error(out.get("error", "저장 실패"))
 
-    available_student_nos = []
+    available_students = []
     if cur > 0:
         try:
             sdocs = db.collection("students").stream()
             for sd in sdocs:
                 sdat = sd.to_dict() or {}
                 sno = int(sdat.get("no", 0) or 0)
+                sname = str(sdat.get("name", "") or "").strip()
                 if sno <= 0:
                     continue
                 used_cnt = api_count_mart_used_this_week(sd.id, include_pending=True)
                 if used_cnt < cur:
-                    available_student_nos.append(sno)
+                    available_students.append((sno, sname))
         except Exception:
-            available_student_nos = []
-    available_student_nos = sorted(set(available_student_nos))
-    if available_student_nos:
-        st.caption(f"간식 구입 가능 학생: {', '.join([f'{n:03d}' for n in available_student_nos])}")
+            available_students = []
+    available_students = sorted(set(available_students), key=lambda x: x[0])
+    if available_students:
+        student_text = ", ".join([f"{no}번 {name}".strip() for no, name in available_students])
+        st.caption(f"간식 구입 가능 학생: {student_text}")
     else:
         st.caption("간식 구입 가능 학생: 없음")    
 
