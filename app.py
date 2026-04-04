@@ -15832,7 +15832,7 @@ if "🧾 로그기록" in tabs:
             st.caption("모든 탭의 변경 이력을 분리 없이 하나의 표로 통합해 보여줍니다.")
 
             # ✅ 요청 반영: 탭별 분리 없이 '단일 통합표'만 제공
-            max_log_rows = st.number_input("표시 행 수", min_value=100, max_value=10000, value=3000, step=100, key="audit_max_rows")
+            max_log_rows = st.number_input("표시 행 수", min_value=100, max_value=10000, value=200, step=100, key="audit_max_rows")
             all_rows = _build_activity_log_rows(limit_per_source=800, max_rows=int(max_log_rows))
             if not all_rows:
                 st.info("표시할 로그가 없습니다.")
