@@ -8,6 +8,7 @@ import random
 import math
 
 from datetime import datetime, timezone, timedelta, date
+from google.api_core.exceptions import AlreadyExists
 
 from db import build_filter, init_db, mongo
 
@@ -11790,6 +11791,22 @@ if "💼 직업/월급" in tabs:
 
             mkey = _month_key(now)
 
+            # ✅ 중복 실행 방지(동시 실행/연속 rerun 보호)
+            # - 문서 create()는 "이미 존재하면 실패" 하므로
+            #   같은 달 자동지급은 한 번만 실행된다.
+            run_lock_id = f"{mkey}_{pay_day:02d}"
+            try:
+                db.collection("payroll_auto_run").document(run_lock_id).create(
+                    {
+                        "month": mkey,
+                        "pay_day": int(pay_day),
+                        "run_at": datetime.utcnow(),
+                        "source": "auto",
+                    }
+                )
+            except AlreadyExists:
+                return
+                
             # 학생 id -> 이름 맵 (메모용)
             accs = api_list_accounts_cached().get("accounts", []) or []
             id_to_name = {a.get("student_id"): a.get("name") for a in accs if a.get("student_id")}
