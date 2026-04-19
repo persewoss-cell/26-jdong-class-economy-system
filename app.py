@@ -12177,8 +12177,8 @@ if "💼 직업/월급" in tabs:
                 st.rerun()
 
             st.markdown("---")
-            st.markdown("#### 🛠️ 자동지급 중복 회수(정정)")
-            st.caption("이번 달 1일 00:00부터 현재까지 발생한 월급 입금 내역에서 같은 학생/같은 직업/같은 금액이 2회 이상인 경우, 2회차부터 자동으로 회수합니다.")
+            st.markdown("#### 🛠️ 월급 중복 지급 회수(정정)")
+            st.caption("이번 달 1일 00:00부터 현재까지 발생한 월급 입금 내역에서 같은 학생/같은 직업/같은 금액이 2회 이상인 경우")
             
             dup_scan = _find_month_duplicate_salary_txs()
             dup_targets = list(dup_scan.get("targets", []) or [])
@@ -12210,7 +12210,7 @@ if "💼 직업/월급" in tabs:
                     st.rerun()
             with cfix2:
                 if st.button(
-                    "♻️ 이번 달 중복 월급 자동 회수 실행",
+                    "♻️ 이번 달 월급 중복 지급 회수 실행",
                     use_container_width=True,
                     key="payroll_dup_fix_btn",
                     disabled=(len(dup_targets) == 0),
