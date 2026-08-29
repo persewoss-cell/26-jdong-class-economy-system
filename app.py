@@ -6870,6 +6870,52 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+# ✅ 메인 메뉴 탭바 좌우 이동 버튼(스크롤바가 OS/브라우저 설정 때문에 안 보이거나
+#    잡기 어려운 경우에도 클릭만으로 좌우 이동 가능하도록). 순수 JS로 부모 문서의
+#    라디오 그룹을 스크롤시킴 - Streamlit rerun 없이 즉시 동작.
+def _render_main_menu_nav_button(direction: str):
+    btn_id = f"__tabnav_{direction}"
+    dx = -180 if direction == "left" else 180
+    arrow = "◀" if direction == "left" else "▶"
+    components.html(
+        f"""
+        <button id="{btn_id}" style="width:100%; height:34px; border:1px solid #ccc;
+            border-radius:6px; background:#f3f4f6; cursor:pointer; font-size:14px; padding:0;">
+            {arrow}
+        </button>
+        <script>
+        (function() {{
+            var btn = document.getElementById("{btn_id}");
+            if (!btn) return;
+            btn.onclick = function() {{
+                try {{
+                    var el = window.parent.document.querySelector('div[role="radiogroup"][aria-label="메인 메뉴"]');
+                    if (el) {{ el.scrollBy({{left: {dx}, behavior: "smooth"}}); }}
+                }} catch (e) {{}}
+            }};
+        }})();
+        </script>
+        """,
+        height=38,
+    )
+
+def _render_main_menu_radio(options: list, format_func):
+    nav_l, nav_mid, nav_r = st.columns([0.05, 0.90, 0.05])
+    with nav_l:
+        _render_main_menu_nav_button("left")
+    with nav_mid:
+        st.radio(
+            "메인 메뉴",
+            options=options,
+            format_func=format_func,
+            horizontal=True,
+            label_visibility="collapsed",
+            key="main_tab_active",
+        )
+    with nav_r:
+        _render_main_menu_nav_button("right")
+
+
 if is_admin:
     tabs = [t for t in ALL_TABS if tab_visible(t)]
     # ✅ 관리자 탭에서만 '🏦 내 통장' 탭 이름을 변경(학생 탭에는 영향 없음)
@@ -6880,14 +6926,7 @@ if is_admin:
     if "main_tab_active" not in st.session_state or st.session_state["main_tab_active"] not in tabs:
         st.session_state["main_tab_active"] = tabs[0] if tabs else None
 
-    st.radio(
-        "메인 메뉴",
-        options=tabs,
-        format_func=lambda k: tabs_display_map.get(k, k),
-        horizontal=True,
-        label_visibility="collapsed",
-        key="main_tab_active",
-    )
+    _render_main_menu_radio(tabs, lambda k: tabs_display_map.get(k, k))
     active_tab = st.session_state.get("main_tab_active")
 
     _active_tab_container = st.container()
@@ -6989,14 +7028,7 @@ else:
     if "main_tab_active" not in st.session_state or st.session_state["main_tab_active"] not in keys_in_order:
         st.session_state["main_tab_active"] = keys_in_order[0] if keys_in_order else None
 
-    st.radio(
-        "메인 메뉴",
-        options=keys_in_order,
-        format_func=lambda k: tab_label_map.get(k, k),
-        horizontal=True,
-        label_visibility="collapsed",
-        key="main_tab_active",
-    )
+    _render_main_menu_radio(keys_in_order, lambda k: tab_label_map.get(k, k))
     active_tab = st.session_state.get("main_tab_active")
 
     _active_tab_container = st.container()
