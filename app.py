@@ -6819,7 +6819,11 @@ def tab_visible(tab_name: str):
 #    더 높은 우선순위로 재정의(글자 잘림 방지 + 터치하기 편한 크기)
 #    - aria-label(위젯 라벨)로 스코프: 이 Streamlit 버전은 input에 key가 id로 안 박혀서
 #      input[id*="main_tab_active"] 선택자가 매칭되지 않아 기존 CSS가 그대로 적용되던 문제 수정
-#    - 줄바꿈 대신 가로 스크롤: 여러 줄로 감싸질 때 2번째 줄 항목이 클릭 안 되는 문제 방지
+#    - ⚠️ flex-wrap:wrap(여러 줄)은 시도해봤지만, 이 Streamlit 버전에서는 탭 아래 본문이
+#      2번째 줄 위로 겹쳐 올라와 2번째 줄 항목이 클릭이 안 되는 버그가 있어 사용 불가(실측 확인됨).
+#      → 한 줄 유지 + 가로 스크롤로 되돌리되, 버튼을 작게 만들어 스크롤 필요성을 최소화하고
+#      스크롤바가 마우스를 올릴 때 사라지지 않도록(오버레이형 자동숨김 방지) 항상 보이는
+#      막대형 스크롤바로 스타일링
 st.markdown(
     """
     <style>
@@ -6828,16 +6832,34 @@ st.markdown(
         overflow-x: auto !important;
         overflow-y: hidden !important;
         -webkit-overflow-scrolling: touch;
-        padding-bottom: 6px;
+        scrollbar-width: auto;                 /* Firefox: 자동숨김 대신 항상 보이는 스크롤바 */
+        padding-bottom: 8px;
+    }
+    /* 항상 보이는 스크롤바(크롬/엣지): 마우스를 올려도 사라지지 않음 */
+    div[role="radiogroup"][aria-label="메인 메뉴"]::-webkit-scrollbar {
+        height: 9px;
+    }
+    div[role="radiogroup"][aria-label="메인 메뉴"]::-webkit-scrollbar-track {
+        background: #eee;
+        border-radius: 5px;
+    }
+    div[role="radiogroup"][aria-label="메인 메뉴"]::-webkit-scrollbar-thumb {
+        background: #aaa;
+        border-radius: 5px;
+    }
+    div[role="radiogroup"][aria-label="메인 메뉴"]::-webkit-scrollbar-thumb:hover {
+        background: #888;
     }
     div[role="radiogroup"][aria-label="메인 메뉴"] > label {
         flex: 0 0 auto !important;
-        min-height: 2.1rem !important;
+        min-height: 1.8rem !important;
         height: auto !important;
         overflow: visible !important;
         white-space: nowrap;
-        padding: 4px 10px !important;
-        font-size: 0.9rem !important;
+        padding: 3px 7px !important;
+        margin: 0 4px 0 0 !important;
+        font-size: 0.78rem !important;
+        letter-spacing: -0.02em;
     }
     /* 탭처럼 보이도록 라디오 동그라미 표시는 숨김(선택 여부는 배경색으로 구분됨) */
     div[role="radiogroup"][aria-label="메인 메뉴"] > label > div:first-child {
