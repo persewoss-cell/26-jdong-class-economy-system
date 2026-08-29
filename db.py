@@ -71,6 +71,18 @@ class DocumentReference:
         payload = _normalize_payload(data)
         self._collection._col.update_one({"_id": self.id}, {"$set": payload}, upsert=False)
 
+    def update_if(self, condition: Dict[str, Any], data: Dict[str, Any]) -> bool:
+        """condition이 현재 문서 상태와 일치할 때만 원자적으로 갱신한다.
+        실제로 반영됐으면 True, 이미 다른 곳에서 먼저 바꿔서 조건이 안 맞으면 False.
+        (동시에 여러 곳에서 같은 문서를 처리하려 할 때 단 한 번만 성공하도록 보장하는 용도.
+        condition은 Mongo 쿼리 연산자($in 등)를 그대로 써야 하므로 _normalize_payload를 거치지 않음.)
+        """
+        payload = _normalize_payload(data)
+        query = {"_id": self.id}
+        query.update(condition)
+        result = self._collection._col.update_one(query, {"$set": payload}, upsert=False)
+        return bool(result.modified_count > 0)
+
     def delete(self):
         self._collection._col.delete_one({"_id": self.id})
 
