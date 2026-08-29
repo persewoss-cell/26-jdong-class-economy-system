@@ -11951,6 +11951,13 @@ if "💼 직업/월급" in tabs and active_tab == "💼 직업/월급":
                 merge=True,
             )
 
+        def _has_any_salary_paid_this_month(month_key: str) -> bool:
+            """이번 달에 (자동이든 수동이든) 월급이 한 번이라도 지급된 적이 있는지 확인."""
+            q = db.collection("payroll_log").where(filter=build_filter("month", "==", month_key)).limit(1).stream()
+            for _ in q:
+                return True
+            return False
+
         def _pay_one_student(student_id: str, amount: int, memo: str, recorder_override: str = ""):
             # 관리자 지급으로 통장 입금(+)
             return api_admin_add_tx_by_student_id(
@@ -12050,6 +12057,24 @@ if "💼 직업/월급" in tabs and active_tab == "💼 직업/월급":
             elif err_cnt > 0:
                 st.warning("월급 자동지급 중 일부 오류가 있었어요. (로그 확인)")
 
+        # ✅ 월급 정정(회수) 거래에 붙는 메모 라벨들
+        #    - "자동중복정정": 중복 지급분만 회수할 때
+        #    - "전체회수": 중복 여부와 무관하게 이번 달 지급분을 통째로 회수할 때
+        _SALARY_CORRECTION_LABELS = ["자동중복정정", "전체회수"]
+
+        def _parse_salary_correction_memo(memo: str, cur_mkey: str):
+            """정정(회수) 거래 메모를 분석해 (정정건 여부, 원본메모, 이번달 정정 여부)를 반환."""
+            for label in _SALARY_CORRECTION_LABELS:
+                tag = f"({label} "
+                if tag in memo:
+                    base_memo = memo.split(tag, 1)[0].strip()
+                    is_this_month = f"({label} {cur_mkey}" in memo
+                    return True, base_memo, is_this_month
+            return False, memo, False
+
+        def _is_salary_correction_memo(memo: str) -> bool:
+            return any(f"({label}" in memo for label in _SALARY_CORRECTION_LABELS)
+
         def _find_month_duplicate_salary_txs():
             """이번 달(1일 00:00~현재) 발생한 월급 입금 중복 건을 찾아 반환.
             반환 형식:
@@ -12090,23 +12115,23 @@ if "💼 직업/월급" in tabs and active_tab == "💼 직업/월급":
                     continue
 
                 # 이미 정정(회수)된 건은 검색에서 제외하기 위해 회수 횟수를 먼저 집계
-                if (ttype == "withdraw") and ("(자동중복정정 " in memo):
-                    base_memo = memo.split("(자동중복정정 ", 1)[0].strip()
-                    # 다른 달 정정 메모는 이번 달 중복 검색에서 제외
-                    if f"(자동중복정정 {cur_mkey}" in memo:
-                        # withdraw 거래 amount는 음수로 저장되는 경우가 있어 절대값으로 맞춘다.
-                        fixed_amt = abs(int(amount))
-                        if fixed_amt <= 0:
-                            continue
-                        k_fix = (sid, base_memo, int(fixed_amt))
-                        corrected_counts[k_fix] = int(corrected_counts.get(k_fix, 0) or 0) + 1
-                    continue
+                # (중복정정/전체회수 두 종류 모두 집계 대상)
+                if ttype == "withdraw":
+                    is_corr, base_memo, is_this_month = _parse_salary_correction_memo(memo, cur_mkey)
+                    if is_corr:
+                        if is_this_month:
+                            # withdraw 거래 amount는 음수로 저장되는 경우가 있어 절대값으로 맞춘다.
+                            fixed_amt = abs(int(amount))
+                            if fixed_amt > 0:
+                                k_fix = (sid, base_memo, int(fixed_amt))
+                                corrected_counts[k_fix] = int(corrected_counts.get(k_fix, 0) or 0) + 1
+                        continue
 
                 if ttype != "deposit":
                     continue
                 if amount <= 0:
                     continue
-                if "(자동중복정정" in memo:
+                if _is_salary_correction_memo(memo):
                     continue
 
                 rows.append(
@@ -12158,10 +12183,109 @@ if "💼 직업/월급" in tabs and active_tab == "💼 직업/월급":
                 "sum_amount": int(sum(int(x.get("amount", 0) or 0) for x in targets)),
             }
 
-        def _reverse_duplicate_salary_txs(targets: list[dict], month_key: str, salary_cfg: dict):
-            """중복 월급 입금 정정:
-            1) 학생 통장에서 중복분 출금
-            2) 월급 공제 세입도 중복분만큼 국고에서 환급(지출)
+        def _find_month_all_salary_txs():
+            """이번 달(1일 00:00~현재) 발생한 월급 입금 내역 '전체'를 회수 대상으로 반환(중복 여부 무관).
+            이미 (중복정정 또는 전체회수로) 회수된 만큼은 제외하고, 아직 회수되지 않은 입금 건만 targets로 반환.
+            반환 형식은 _find_month_duplicate_salary_txs 와 동일.
+            """
+            now_kst = datetime.now(KST)
+            start_kst = datetime(now_kst.year, now_kst.month, 1, 0, 0, 0, tzinfo=KST)
+            end_kst = now_kst
+            start_utc = start_kst.astimezone(timezone.utc).replace(tzinfo=None)
+            end_utc = end_kst.astimezone(timezone.utc).replace(tzinfo=None)
+
+            accs = api_list_accounts_cached().get("accounts", []) or []
+            id_to_name = {str(a.get("student_id")): str(a.get("name") or "") for a in accs if a.get("student_id")}
+
+            rows = []
+            corrected_counts = {}  # (student_id, 원본메모, amount) -> 회수 건수(중복정정+전체회수 합산)
+            cur_mkey = _month_key(now_kst)
+            q = (
+                db.collection("transactions")
+                .where(filter=build_filter("created_at", ">=", start_utc))
+                .where(filter=build_filter("created_at", "<", end_utc))
+                .stream()
+            )
+            for d in q:
+                tx = d.to_dict() or {}
+                memo = str(tx.get("memo", "") or "").strip()
+                ttype = str(tx.get("type", "") or "")
+                sid = str(tx.get("student_id", "") or "").strip()
+                amount = int(tx.get("amount", 0) or 0)
+
+                if not memo.startswith("월급 "):
+                    continue
+                if not sid:
+                    continue
+
+                if ttype == "withdraw":
+                    is_corr, base_memo, is_this_month = _parse_salary_correction_memo(memo, cur_mkey)
+                    if is_corr:
+                        if is_this_month:
+                            fixed_amt = abs(int(amount))
+                            if fixed_amt > 0:
+                                k_fix = (sid, base_memo, int(fixed_amt))
+                                corrected_counts[k_fix] = int(corrected_counts.get(k_fix, 0) or 0) + 1
+                        continue
+
+                if ttype != "deposit":
+                    continue
+                if amount <= 0:
+                    continue
+                if _is_salary_correction_memo(memo):
+                    continue
+
+                rows.append(
+                    {
+                        "tx_id": str(d.id),
+                        "student_id": sid,
+                        "name": id_to_name.get(sid, ""),
+                        "memo": memo,
+                        "amount": int(amount),
+                        "created_at": _to_utc_datetime(tx.get("created_at")),
+                    }
+                )
+
+            # 회수(중복정정+전체회수)된 건수만큼 앞에서부터 제외하고, 나머지는 중복 여부와 무관하게 전부 회수 대상
+            by_key = {}
+            for r in rows:
+                k = (r["student_id"], r["memo"], int(r["amount"]))
+                by_key.setdefault(k, []).append(r)
+
+            targets, groups = [], []
+            for (sid, memo, amt), arr in by_key.items():
+                arr.sort(key=lambda x: x.get("created_at") or datetime(1970, 1, 1, tzinfo=timezone.utc))
+                fix_cnt = int(corrected_counts.get((sid, memo, int(amt)), 0) or 0)
+                remain_cnt = max(0, len(arr) - fix_cnt)
+                if remain_cnt <= 0:
+                    continue
+
+                remain = arr[len(arr) - remain_cnt :]
+                targets.extend(remain)
+                groups.append(
+                    {
+                        "student_id": sid,
+                        "name": arr[0].get("name", ""),
+                        "memo": memo,
+                        "amount": int(amt),
+                        "count": len(arr),
+                        "fixed_count": fix_cnt,
+                        "remain_count": remain_cnt,
+                    }
+                )
+
+            return {
+                "targets": targets,
+                "groups": groups,
+                "sum_amount": int(sum(int(x.get("amount", 0) or 0) for x in targets)),
+            }
+
+        def _reverse_duplicate_salary_txs(targets: list[dict], month_key: str, salary_cfg: dict, marker_label: str = "자동중복정정"):
+            """월급 입금 정정(회수):
+            1) 학생 통장에서 대상분 출금
+            2) 월급 공제 세입도 대상분만큼 국고에서 환급(지출)
+            marker_label: 정정 메모에 붙는 라벨("자동중복정정" 또는 "전체회수"). 이후 스캔에서
+            이미 회수된 건을 식별하는 데도 쓰이므로 _SALARY_CORRECTION_LABELS 에 포함된 값이어야 함.
             """
             if not targets:
                 return {"ok": True, "fixed": 0, "treasury_fixed": 0, "errors": []}
@@ -12198,8 +12322,8 @@ if "💼 직업/월급" in tabs and active_tab == "💼 직업/월급":
                 if (not sid) or amt <= 0:
                     continue
 
-                # 1) 학생 중복입금 회수
-                fix_memo = f"{memo}(자동중복정정 {month_key})"
+                # 1) 학생 입금 회수
+                fix_memo = f"{memo}({marker_label} {month_key})"
                 res = api_admin_add_tx_by_student_id(
                     admin_pin=ADMIN_PIN,
                     student_id=sid,
@@ -12213,14 +12337,14 @@ if "💼 직업/월급" in tabs and active_tab == "💼 직업/월급":
                     continue
                 fixed_cnt += 1
 
-                # 2) 국고 공제 세입 중복분 환급(지출)
+                # 2) 국고 공제 세입 회수분 환급(지출)
                 job_name = memo.replace("월급 ", "", 1).strip()
                 ded = int(job_to_deduction.get(job_name, 0) or 0)
                 if ded > 0:
                     nm = id_to_name.get(sid, "")
                     tre_res = api_add_treasury_tx(
                         admin_pin=ADMIN_PIN,
-                        memo=f"월급 공제 세입 중복정정({month_key}) {job_name}" + (f" - {nm}" if nm else ""),
+                        memo=f"월급 공제 세입 {marker_label}({month_key}) {job_name}" + (f" - {nm}" if nm else ""),
                         income=0,
                         expense=ded,
                         actor="system_salary",
@@ -12391,7 +12515,10 @@ if "💼 직업/월급" in tabs and active_tab == "💼 직업/월급":
             else:
                 st.info("이번 달 기준으로 회수할 자동 월급 중복 건이 없습니다.")
 
-            cfix1, cfix2 = st.columns([1.2, 1.8])
+            cur_month_key_payroll = _month_key(datetime.now(KST))
+            paid_this_month = _has_any_salary_paid_this_month(cur_month_key_payroll)
+
+            cfix1, cfix2, cfix3 = st.columns([1.0, 1.7, 1.7])
             with cfix1:
                 if st.button("🔍 중복 다시 검사", use_container_width=True, key="payroll_dup_rescan"):
                     st.rerun()
@@ -12404,6 +12531,17 @@ if "💼 직업/월급" in tabs and active_tab == "💼 직업/월급":
                 ):
                     st.session_state["payroll_dup_fix_confirm"] = True
                     st.rerun()
+            with cfix3:
+                if st.button(
+                    "🗑️ 이번달 회수(중복 여부 관계 없이)",
+                    use_container_width=True,
+                    key="payroll_all_fix_btn",
+                    disabled=(not paid_this_month),
+                ):
+                    st.session_state["payroll_all_fix_confirm"] = True
+                    st.rerun()
+            if not paid_this_month:
+                st.caption("⚠️ 이번달 월급 지급이 되지 않아서 처리할 수 없습니다.")
 
             if st.session_state.get("payroll_dup_fix_confirm", False):
                 st.error("중복 월급 회수(정정)를 실행합니다. 실행 후에는 되돌릴 수 없으니 관리자 PIN을 입력하세요.")
@@ -12436,7 +12574,58 @@ if "💼 직업/월급" in tabs and active_tab == "💼 직업/월급":
                     if st.button("취소", use_container_width=True, key="payroll_dup_fix_no"):
                         st.session_state["payroll_dup_fix_confirm"] = False
                         st.rerun()
-        
+
+            if st.session_state.get("payroll_all_fix_confirm", False):
+                if not paid_this_month:
+                    st.error("이번달 월급 지급이 되지 않아서 처리할 수 없습니다.")
+                    st.session_state["payroll_all_fix_confirm"] = False
+                else:
+                    all_scan = _find_month_all_salary_txs()
+                    all_targets = list(all_scan.get("targets", []) or [])
+                    all_sum = int(all_scan.get("sum_amount", 0) or 0)
+
+                    if not all_targets:
+                        st.info("이번달 지급된 월급이 이미 모두 회수되어, 더 이상 회수할 대상이 없습니다.")
+                        st.session_state["payroll_all_fix_confirm"] = False
+                    else:
+                        st.error(
+                            f"중복 여부와 관계없이 이번 달 지급된 월급 전체(회수 대상 {len(all_targets)}건 · "
+                            f"예상 회수액 {all_sum}원)를 회수합니다. 국고에 반영된 공제 세입도 함께 되돌립니다. "
+                            "실행 후에는 되돌릴 수 없으니 관리자 PIN을 입력하세요."
+                        )
+                        admin_all_fix_pin = st.text_input(
+                            "관리자 비밀번호(PIN)",
+                            type="password",
+                            key="payroll_all_fix_pin",
+                        )
+                        y3, n3 = st.columns(2)
+                        with y3:
+                            if st.button("이번달 회수 실행", use_container_width=True, key="payroll_all_fix_yes"):
+                                if str(admin_all_fix_pin or "").strip() != str(ADMIN_PIN):
+                                    st.error("관리자 비밀번호(PIN)가 올바르지 않습니다.")
+                                    st.stop()
+                                cur_month_key = _month_key(datetime.now(KST))
+                                all_fix_res = _reverse_duplicate_salary_txs(
+                                    all_targets, cur_month_key, cfg, marker_label="전체회수"
+                                )
+                                st.session_state["payroll_all_fix_confirm"] = False
+                                if all_fix_res.get("fixed", 0) > 0:
+                                    toast(
+                                        f"이번달 월급 회수 완료: 학생회수 {int(all_fix_res.get('fixed', 0))}건 / "
+                                        f"국고정정 {int(all_fix_res.get('treasury_fixed', 0))}건",
+                                        icon="🗑️",
+                                    )
+                                if all_fix_res.get("errors"):
+                                    st.warning(f"일부 회수 실패: {len(all_fix_res.get('errors', []))}건")
+                                    with st.expander("회수 실패 상세", expanded=False):
+                                        for e in all_fix_res.get("errors", []):
+                                            st.write(f"- {e}")
+                                st.rerun()
+                        with n3:
+                            if st.button("취소", use_container_width=True, key="payroll_all_fix_no"):
+                                st.session_state["payroll_all_fix_confirm"] = False
+                                st.rerun()
+
         # -------------------------------------------------
         # ✅ 직업/월급 표 데이터 로드 (job_salary 컬렉션)
         # -------------------------------------------------
