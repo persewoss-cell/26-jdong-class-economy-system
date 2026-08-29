@@ -3030,9 +3030,8 @@ def api_savings_cancel(login_name: str, login_pin: str, savings_id: str):
     student_ref = db.collection("students").document(student_doc.id)
     savings_ref = db.collection(SAV_COL if "SAV_COL" in globals() else "savings").document(savings_id)
 
-    @mongo.transactional
-    def _do(transaction):
-        s_snap = savings_ref.get(transaction=transaction)
+    def _do():
+        s_snap = savings_ref.get()
         if not s_snap.exists:
             raise ValueError("해당 적금을 찾지 못했습니다.")
         s = s_snap.to_dict() or {}
@@ -3044,16 +3043,18 @@ def api_savings_cancel(login_name: str, login_pin: str, savings_id: str):
         principal = int(s.get("principal", 0) or 0)
         weeks = int(s.get("weeks", 0) or 0)
 
-        st_snap = student_ref.get(transaction=transaction)
+        # ✅ 원자적 선점(중복 지급 방지): 해지 버튼을 두 번 누르거나 화면이 여러 개 열려 있어도
+        #    이 적금 건은 단 한 번만 환급이 진행되도록 함
+        claimed = savings_ref.update_if({"status": "active"}, {"status": "canceled"})
+        if not claimed:
+            raise ValueError("이미 처리된 적금입니다.")
+
+        st_snap = student_ref.get()
         bal = int((st_snap.to_dict() or {}).get("balance", 0) or 0)
         new_bal = bal + principal
+        student_ref.update({"balance": new_bal})
 
-        transaction.update(savings_ref, {"status": "canceled"})
-        transaction.update(student_ref, {"balance": new_bal})
-
-        tx_ref = db.collection("transactions").document()
-        transaction.set(
-            tx_ref,
+        db.collection("transactions").document().set(
             {
                 "student_id": student_doc.id,
                 "type": "deposit",
@@ -3062,12 +3063,12 @@ def api_savings_cancel(login_name: str, login_pin: str, savings_id: str):
                 "memo": f"적금 해지({weeks}주)",
                 "recorder": str((student_doc.to_dict() or {}).get("name", "") or login_name or ""),
                 "created_at": datetime.utcnow(),
-            },
+            }
         )
         return principal
 
     try:
-        refunded = _do(db.transaction())
+        refunded = _do()
         return {"ok": True, "refunded": int(refunded)}
     except ValueError as e:
         return {"ok": False, "error": str(e)}
@@ -3109,31 +3110,28 @@ def api_process_maturities(login_name: str, login_pin: str):
         weeks = int(s.get("weeks", 0) or 0)
 
         savings_ref = db.collection(SAV_COL if "SAV_COL" in globals() else "savings").document(sid)
-        tx_ref = db.collection("transactions").document()
 
-        @mongo.transactional
-        def _do_one(transaction):
-            st_snap = student_ref.get(transaction=transaction)
-            bal = int((st_snap.to_dict() or {}).get("balance", 0) or 0)
-            new_bal = bal + amount
+        # ✅ 원자적 선점: 여러 화면/자동처리가 동시에 같은 적금을 만기 처리하려 해도
+        #    단 하나만 성공하도록 함(성공한 경우에만 아래에서 실제 지급 진행) → 중복 지급 방지
+        claimed = savings_ref.update_if({"status": "active"}, {"status": "matured"})
+        if not claimed:
+            continue
 
-            transaction.update(student_ref, {"balance": new_bal})
-            transaction.update(savings_ref, {"status": "matured"})
-            transaction.set(
-                tx_ref,
-                {
-                    "student_id": student_doc.id,
-                    "type": "maturity",
-                    "amount": amount,
-                    "balance_after": new_bal,
-                    "memo": f"적금 만기({weeks}주)",
-                    "recorder": _get_recorder_label(False, str((student_doc.to_dict() or {}).get("name", "") or login_name or "")),
-                    "created_at": datetime.utcnow(),
-                },
-            )
-            return new_bal
-
-        _do_one(db.transaction())
+        st_snap = student_ref.get()
+        bal = int((st_snap.to_dict() or {}).get("balance", 0) or 0)
+        new_bal = bal + amount
+        student_ref.update({"balance": new_bal})
+        db.collection("transactions").document().set(
+            {
+                "student_id": student_doc.id,
+                "type": "maturity",
+                "amount": amount,
+                "balance_after": new_bal,
+                "memo": f"적금 만기({weeks}주)",
+                "recorder": _get_recorder_label(False, str((student_doc.to_dict() or {}).get("name", "") or login_name or "")),
+                "created_at": datetime.utcnow(),
+            }
+        )
         matured_count += 1
         paid_total += amount
 
@@ -6454,6 +6452,21 @@ with st.sidebar:
 # =========================
 # 시스템 자동 지급 러너(로그인 무관)
 # =========================
+def _system_calc_net(gross: int, cfg: dict) -> int:
+    """직업/월급 탭의 _calc_net()과 동일한 계산식(실수령액 = 총액 - 세금% - 자리임대료 - 전기세 - 건강보험료).
+    이 함수(모듈 최상단, 로그인 화면보다 먼저 실행됨)에서는 그 탭의 로컬 _calc_net()이 아직
+    정의되기 전이라 직접 정의해서 사용한다(안 그러면 NameError로 자동지급 전체가 조용히 실패함)."""
+    gross = int(gross or 0)
+    cfg = cfg or {}
+    tax_percent = float(cfg.get("tax_percent", 10.0) or 10.0)
+    desk = int(cfg.get("desk_rent", 50) or 50)
+    elec = int(cfg.get("electric_fee", 10) or 10)
+    health = int(cfg.get("health_fee", 10) or 10)
+    tax = int(round(gross * (tax_percent / 100.0)))
+    net = gross - tax - desk - elec - health
+    return max(0, int(net))
+
+
 def _system_month_key(dt: datetime) -> str:
     return f"{dt.year:04d}-{dt.month:02d}"
 
@@ -6509,32 +6522,24 @@ def _run_system_auto_payouts():
             if (not sid) or payout <= 0:
                 continue
 
-            @mongo.transactional
-            def _mature_one(transaction, sav_id: str, student_id: str, amount: int, wk: int):
+            def _mature_one(sav_id: str, student_id: str, amount: int, wk: int):
                 sav_ref = db.collection("savings").document(sav_id)
-                stu_ref = db.collection("students").document(student_id)
-                tx_ref = db.collection("transactions").document()
 
-                sav_snap = sav_ref.get(transaction=transaction)
-                if not sav_snap.exists:
-                    return False
-                cur = sav_snap.to_dict() or {}
-                if str(cur.get("status", "")) not in ("running", "active"):
-                    return False
-                maturity2 = _to_utc_datetime(cur.get("maturity_utc") or cur.get("maturity_date"))
-                if (not maturity2) or (maturity2 > datetime.now(timezone.utc)):
-                    return False
-
-                st_snap = stu_ref.get(transaction=transaction)
-                bal = int((st_snap.to_dict() or {}).get("balance", 0) or 0)
-                new_bal = int(bal + amount)
-                transaction.update(stu_ref, {"balance": int(new_bal)})
-                transaction.update(
-                    sav_ref,
+                # ✅ 원자적 선점(중복 지급 방지): 여러 자동처리/화면이 동시에 실행돼도
+                #    이 적금 건은 그 중 단 하나만 성공적으로 "matured"로 바꿀 수 있음
+                claimed = sav_ref.update_if(
+                    {"status": {"$in": ["running", "active"]}},
                     {"status": "matured", "result": "matured", "processed_at": datetime.utcnow(), "payout_amount": int(amount)},
                 )
-                transaction.set(
-                    tx_ref,
+                if not claimed:
+                    return False
+
+                stu_ref = db.collection("students").document(student_id)
+                st_snap = stu_ref.get()
+                bal = int((st_snap.to_dict() or {}).get("balance", 0) or 0)
+                new_bal = int(bal + amount)
+                stu_ref.update({"balance": int(new_bal)})
+                db.collection("transactions").document().set(
                     {
                         "student_id": str(student_id),
                         "type": "maturity",
@@ -6543,18 +6548,21 @@ def _run_system_auto_payouts():
                         "memo": f"적금 만기 지급 ({int(wk)}주)",
                         "recorder": "시스템(적금)",
                         "created_at": datetime.utcnow(),
-                    },
+                    }
                 )
                 return True
 
-            _mature_one(db.transaction(), doc_id, sid, int(payout), int(weeks))
+            _mature_one(doc_id, sid, int(payout), int(weeks))
 
         payroll_cfg_snap = db.collection("config").document("salary_payroll").get()
         payroll_cfg = payroll_cfg_snap.to_dict() if payroll_cfg_snap.exists else {}
         auto_enabled = bool((payroll_cfg or {}).get("auto_enabled", False))
         pay_day = max(1, min(31, int((payroll_cfg or {}).get("pay_day", 25) or 25)))
         now_kst = datetime.now(KST)
-        if not (auto_enabled and int(now_kst.day) == int(pay_day)):
+        # ✅ 지급일 "이후"면 항상 시도(그날 아무도 접속 안 해서 놓쳤어도, 이번 달 안에
+        #    누군가 접속하면 그때 밀린 월급을 자동 지급). 아래 payroll_auto_run 잠금(월 1회)과
+        #    _system_already_paid_this_month 체크가 있어 중복 지급은 안 됨.
+        if not (auto_enabled and int(now_kst.day) >= int(pay_day)):
             return
 
         mkey = _system_month_key(now_kst)
@@ -6566,7 +6574,7 @@ def _run_system_auto_payouts():
         except AlreadyExists:
             return
 
-        salary_cfg_snap = db.collection("config").document("salary_deduction").get()
+        salary_cfg_snap = db.collection("config").document("salary_deductions").get()
         salary_cfg = salary_cfg_snap.to_dict() if salary_cfg_snap.exists else {}
         accs = api_list_accounts_cached().get("accounts", []) or []
         id_to_name = {a.get("student_id"): a.get("name") for a in accs if a.get("student_id")}
@@ -6576,7 +6584,7 @@ def _run_system_auto_payouts():
             job_id = str(d.id)
             job_name = str(job.get("job", "") or "")
             gross = int(job.get("salary", 0) or 0)
-            net_amt = int(_calc_net(gross, salary_cfg) or 0)
+            net_amt = int(_system_calc_net(gross, salary_cfg) or 0)
             if net_amt <= 0:
                 continue
 
@@ -10669,6 +10677,17 @@ if "admin::🏦 은행(적금)" in tabs and active_tab == "admin::🏦 은행(�
 
                     payout = int(x.get("maturity_amount", 0) or 0)
                     memo = f"적금 만기 지급 ({x.get('weeks')}주)"
+
+                    # ✅ 원자적 선점(중복 지급 방지): 동시에 여러 화면/자동처리가 열려 있어도
+                    #    이 적금 건은 그 중 단 하나만 아래 지급을 진행하도록 함
+                    sav_ref = db.collection(SAV_COL).document(d.id)
+                    claimed = sav_ref.update_if(
+                        {"status": "running"},
+                        {"status": "matured", "payout_amount": payout, "processed_at": datetime.utcnow()},
+                    )
+                    if not claimed:
+                        continue
+
                     res = api_admin_add_tx_by_student_id(
                         admin_pin=ADMIN_PIN,
                         student_id=student_id,
@@ -10678,14 +10697,10 @@ if "admin::🏦 은행(적금)" in tabs and active_tab == "admin::🏦 은행(�
                         recorder_override="관리자",
                     )
                     if res.get("ok"):
-                        db.collection(SAV_COL).document(d.id).update(
-                            {
-                                "status": "matured",
-                                "payout_amount": payout,
-                                "processed_at": datetime.utcnow(),
-                            }
-                        )
                         proc_cnt += 1
+                    else:
+                        # 지급 실패 시 선점을 되돌려서 다음 기회에 다시 시도되게 함
+                        sav_ref.update({"status": "running", "payout_amount": None, "processed_at": None})
 
             if proc_cnt > 0:
                 toast(f"만기 자동 처리: {proc_cnt}건", icon="🏦")
@@ -10710,7 +10725,14 @@ if "admin::🏦 은행(적금)" in tabs and active_tab == "admin::🏦 은행(�
                 bool(as_admin_action),
                 str(globals().get("login_name", "") or "").strip(),
             )
-            
+
+            # ✅ 원자적 선점(중복 지급 방지): 버튼을 두 번 누르거나 화면이 여러 개 열려 있어도
+            #    이 적금 건은 단 한 번만 중도해지 지급이 진행되도록 함
+            sav_ref = db.collection(SAV_COL).document(doc_id)
+            claimed = sav_ref.update_if({"status": "running"}, {"status": "canceled", "payout_amount": principal, "processed_at": datetime.utcnow()})
+            if not claimed:
+                return {"ok": False, "error": "이미 처리된 적금이에요."}
+
             res = api_admin_add_tx_by_student_id(
                 admin_pin=ADMIN_PIN,
                 student_id=student_id,
@@ -10720,14 +10742,9 @@ if "admin::🏦 은행(적금)" in tabs and active_tab == "admin::🏦 은행(�
                 recorder_override=recorder_override,
             )
             if res.get("ok"):
-                db.collection(SAV_COL).document(doc_id).update(
-                    {
-                        "status": "canceled",
-                        "payout_amount": principal,
-                        "processed_at": datetime.utcnow(),
-                    }
-                )
                 return {"ok": True}
+            # 지급 실패 시 선점을 되돌려서 다시 시도할 수 있게 함
+            sav_ref.update({"status": "running", "payout_amount": None, "processed_at": None})
             return {"ok": False, "error": res.get("error", "중도해지 실패")}
 
         def _make_savings(student_id: str, no: int, name: str, weeks: int, principal: int):
@@ -11954,7 +11971,9 @@ if "💼 직업/월급" in tabs and active_tab == "💼 직업/월급":
             pay_day = int(cfg_pay.get("pay_day", 25) or 25)
             pay_day = max(1, min(31, pay_day))
 
-            if int(now.day) != pay_day:
+            # ✅ 지급일이 지났는데 그날 아무도 접속을 안 해서 놓친 경우, 이번 달 안에
+            #    관리자가 접속하면 그때라도 밀린 월급을 자동 지급(아래 잠금으로 중복 지급 방지)
+            if int(now.day) < pay_day:
                 return
 
             mkey = _month_key(now)
@@ -12241,7 +12260,7 @@ if "💼 직업/월급" in tabs and active_tab == "💼 직업/월급":
                     "자동지급",
                     value=bool(payroll_cfg.get("auto_enabled", False)),
                     key="payroll_auto_on",
-                    help="해당 날짜에 매월, 학생의 직업 실수령액 기준으로 자동 지급합니다.\n이미 이번 달에 수동지급을 했으면 자동지급은 그 달에는 패스됩니다.",
+                    help="해당 날짜부터 매월, 학생의 직업 실수령액 기준으로 자동 지급합니다.\n그날 아무도 접속을 안 해서 놓쳐도, 이번 달 안에 누군가 접속하면 그때 밀린 월급이 자동 지급됩니다.\n이미 이번 달에 수동지급을 했으면 자동지급은 그 달에는 패스됩니다.",
                 )
 
             with cc3:
@@ -15018,6 +15037,17 @@ if "🏦 은행(적금)" in tabs and active_tab == "🏦 은행(적금)":
 
                     payout = int(x.get("maturity_amount", 0) or 0)
                     memo = f"적금 만기 지급 ({x.get('weeks')}주)"
+
+                    # ✅ 원자적 선점(중복 지급 방지): 동시에 여러 화면/자동처리가 열려 있어도
+                    #    이 적금 건은 그 중 단 하나만 아래 지급을 진행하도록 함
+                    sav_ref = db.collection(SAV_COL).document(d.id)
+                    claimed = sav_ref.update_if(
+                        {"status": "running"},
+                        {"status": "matured", "payout_amount": payout, "processed_at": datetime.utcnow()},
+                    )
+                    if not claimed:
+                        continue
+
                     res = api_admin_add_tx_by_student_id(
                         admin_pin=ADMIN_PIN,
                         student_id=student_id,
@@ -15027,14 +15057,10 @@ if "🏦 은행(적금)" in tabs and active_tab == "🏦 은행(적금)":
                         recorder_override="관리자",
                     )
                     if res.get("ok"):
-                        db.collection(SAV_COL).document(d.id).update(
-                            {
-                                "status": "matured",
-                                "payout_amount": payout,
-                                "processed_at": datetime.utcnow(),
-                            }
-                        )
                         proc_cnt += 1
+                    else:
+                        # 지급 실패 시 선점을 되돌려서 다음 기회에 다시 시도되게 함
+                        sav_ref.update({"status": "running", "payout_amount": None, "processed_at": None})
 
             if proc_cnt > 0:
                 toast(f"만기 자동 처리: {proc_cnt}건", icon="🏦")
@@ -15058,8 +15084,15 @@ if "🏦 은행(적금)" in tabs and active_tab == "🏦 은행(적금)":
             recorder_override = _get_recorder_label(
                 bool(as_admin_action),
                 str(globals().get("login_name", "") or "").strip(),
-            )            
-            
+            )
+
+            # ✅ 원자적 선점(중복 지급 방지): 버튼을 두 번 누르거나 화면이 여러 개 열려 있어도
+            #    이 적금 건은 단 한 번만 중도해지 지급이 진행되도록 함
+            sav_ref = db.collection(SAV_COL).document(doc_id)
+            claimed = sav_ref.update_if({"status": "running"}, {"status": "canceled", "payout_amount": principal, "processed_at": datetime.utcnow()})
+            if not claimed:
+                return {"ok": False, "error": "이미 처리된 적금이에요."}
+
             res = api_admin_add_tx_by_student_id(
                 admin_pin=ADMIN_PIN,
                 student_id=student_id,
@@ -15069,14 +15102,9 @@ if "🏦 은행(적금)" in tabs and active_tab == "🏦 은행(적금)":
                 recorder_override=recorder_override,
             )
             if res.get("ok"):
-                db.collection(SAV_COL).document(doc_id).update(
-                    {
-                        "status": "canceled",
-                        "payout_amount": principal,
-                        "processed_at": datetime.utcnow(),
-                    }
-                )
                 return {"ok": True}
+            # 지급 실패 시 선점을 되돌려서 다시 시도할 수 있게 함
+            sav_ref.update({"status": "running", "payout_amount": None, "processed_at": None})
             return {"ok": False, "error": res.get("error", "중도해지 실패")}
 
         def _make_savings(student_id: str, no: int, name: str, weeks: int, principal: int):
