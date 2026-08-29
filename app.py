@@ -6890,6 +6890,11 @@ def _render_main_menu_radio(options: list, format_func):
         label_visibility="collapsed",
         key="main_tab_active",
     )
+    # ✅ 탭 버튼줄과 아래 본문 사이 여백 + 구분선(너무 붙어 보인다는 피드백 반영)
+    st.markdown(
+        "<hr style='margin: 10px 0 18px 0; border: none; border-top: 1px solid #ddd;'>",
+        unsafe_allow_html=True,
+    )
 
 
 if is_admin:
