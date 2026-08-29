@@ -6816,14 +6816,15 @@ def tab_visible(tab_name: str):
 # - 학생(개별로그인): "거래/투자/적금/목표" (투자 비활성화면 투자 탭 숨김)
 # -------------------------
 # ✅ 메인 메뉴(구 st.tabs) 전용 라디오 스타일: 위쪽 O/X/△ 소형 라디오 스타일을 물려받지 않도록
-#    더 높은 우선순위로 재정의(글자 잘림 방지 + 터치하기 편한 크기)
+#    더 높은 우선순위로 재정의
 #    - aria-label(위젯 라벨)로 스코프: 이 Streamlit 버전은 input에 key가 id로 안 박혀서
 #      input[id*="main_tab_active"] 선택자가 매칭되지 않아 기존 CSS가 그대로 적용되던 문제 수정
-#    - ⚠️ flex-wrap:wrap(여러 줄)은 시도해봤지만, 이 Streamlit 버전에서는 탭 아래 본문이
-#      2번째 줄 위로 겹쳐 올라와 2번째 줄 항목이 클릭이 안 되는 버그가 있어 사용 불가(실측 확인됨).
-#      → 한 줄 유지 + 가로 스크롤로 되돌리되, 버튼을 작게 만들어 스크롤 필요성을 최소화하고
-#      스크롤바가 마우스를 올릴 때 사라지지 않도록(오버레이형 자동숨김 방지) 항상 보이는
-#      막대형 스크롤바로 스타일링
+#    - ⚠️ flex-wrap:wrap(버튼 자체를 여러 줄로 감싸기)은 시도해봤지만, 이 Streamlit 버전에서는
+#      탭 아래 본문이 2번째 줄 위로 겹쳐 올라와 2번째 줄 항목이 클릭이 안 되는 버그가 있어
+#      사용 불가(실측 확인됨) → 라디오그룹 자체는 한 줄 유지 + 가로 스크롤
+#    - 버튼 좌우 폭을 줄이기 위해 각 버튼 내부의 동그라미 표시를 글자 왼쪽이 아니라
+#      글자 "위"로 옮겨 2줄(동그라미/글자) 버튼으로 만듦 → 버튼이 더 좁고 길쭉해져서
+#      같은 가로폭에 더 많은 탭이 들어가고 스크롤 필요성이 줄어듦
 st.markdown(
     """
     <style>
@@ -6833,6 +6834,7 @@ st.markdown(
         overflow-y: hidden !important;
         -webkit-overflow-scrolling: touch;
         scrollbar-width: auto;                 /* Firefox: 자동숨김 대신 항상 보이는 스크롤바 */
+        align-items: flex-start !important;
         padding-bottom: 8px;
     }
     /* 항상 보이는 스크롤바(크롬/엣지): 마우스를 올려도 사라지지 않음 */
@@ -6852,68 +6854,42 @@ st.markdown(
     }
     div[role="radiogroup"][aria-label="메인 메뉴"] > label {
         flex: 0 0 auto !important;
-        min-height: 1.8rem !important;
+        min-height: 2.6rem !important;
         height: auto !important;
         overflow: visible !important;
         white-space: nowrap;
-        padding: 3px 7px !important;
-        margin: 0 4px 0 0 !important;
-        font-size: 0.78rem !important;
-        letter-spacing: -0.02em;
+        padding: 3px 5px !important;
+        margin: 0 3px 0 0 !important;
+        font-size: 0.74rem !important;
+        letter-spacing: -0.03em;
     }
-    /* 탭처럼 보이도록 라디오 동그라미 표시는 숨김(선택 여부는 배경색으로 구분됨) */
-    div[role="radiogroup"][aria-label="메인 메뉴"] > label > div:first-child {
-        display: none !important;
+    /* 버튼 내부(동그라미 표시 + 글자)를 가로 배치 대신 세로(동그라미 위, 글자 아래)로 배치
+       → 버튼 좌우 폭 축소, 위아래 길이 증가 */
+    div[role="radiogroup"][aria-label="메인 메뉴"] > label > div > div {
+        flex-direction: column !important;
+        align-items: center !important;
+        justify-content: center !important;
+        gap: 1px !important;
+    }
+    /* 동그라미 표시 자체도 살짝 축소 */
+    div[role="radiogroup"][aria-label="메인 메뉴"] > label > div > div > div:first-child {
+        margin: 0 !important;
+        transform: scale(0.72);
     }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-# ✅ 메인 메뉴 탭바 좌우 이동 버튼(스크롤바가 OS/브라우저 설정 때문에 안 보이거나
-#    잡기 어려운 경우에도 클릭만으로 좌우 이동 가능하도록). 순수 JS로 부모 문서의
-#    라디오 그룹을 스크롤시킴 - Streamlit rerun 없이 즉시 동작.
-def _render_main_menu_nav_button(direction: str):
-    btn_id = f"__tabnav_{direction}"
-    dx = -180 if direction == "left" else 180
-    arrow = "◀" if direction == "left" else "▶"
-    components.html(
-        f"""
-        <button id="{btn_id}" style="width:100%; height:34px; border:1px solid #ccc;
-            border-radius:6px; background:#f3f4f6; cursor:pointer; font-size:14px; padding:0;">
-            {arrow}
-        </button>
-        <script>
-        (function() {{
-            var btn = document.getElementById("{btn_id}");
-            if (!btn) return;
-            btn.onclick = function() {{
-                try {{
-                    var el = window.parent.document.querySelector('div[role="radiogroup"][aria-label="메인 메뉴"]');
-                    if (el) {{ el.scrollBy({{left: {dx}, behavior: "smooth"}}); }}
-                }} catch (e) {{}}
-            }};
-        }})();
-        </script>
-        """,
-        height=38,
-    )
-
 def _render_main_menu_radio(options: list, format_func):
-    nav_l, nav_mid, nav_r = st.columns([0.05, 0.90, 0.05])
-    with nav_l:
-        _render_main_menu_nav_button("left")
-    with nav_mid:
-        st.radio(
-            "메인 메뉴",
-            options=options,
-            format_func=format_func,
-            horizontal=True,
-            label_visibility="collapsed",
-            key="main_tab_active",
-        )
-    with nav_r:
-        _render_main_menu_nav_button("right")
+    st.radio(
+        "메인 메뉴",
+        options=options,
+        format_func=format_func,
+        horizontal=True,
+        label_visibility="collapsed",
+        key="main_tab_active",
+    )
 
 
 if is_admin:
