@@ -6817,19 +6817,31 @@ def tab_visible(tab_name: str):
 # -------------------------
 # ✅ 메인 메뉴(구 st.tabs) 전용 라디오 스타일: 위쪽 O/X/△ 소형 라디오 스타일을 물려받지 않도록
 #    더 높은 우선순위로 재정의(글자 잘림 방지 + 터치하기 편한 크기)
+#    - aria-label(위젯 라벨)로 스코프: 이 Streamlit 버전은 input에 key가 id로 안 박혀서
+#      input[id*="main_tab_active"] 선택자가 매칭되지 않아 기존 CSS가 그대로 적용되던 문제 수정
+#    - 줄바꿈 대신 가로 스크롤: 여러 줄로 감싸질 때 2번째 줄 항목이 클릭 안 되는 문제 방지
 st.markdown(
     """
     <style>
-    div[data-testid="stRadio"]:has(input[id*="main_tab_active"]) > div[role="radiogroup"] {
-        flex-wrap: wrap;
+    div[role="radiogroup"][aria-label="메인 메뉴"] {
+        flex-wrap: nowrap !important;
+        overflow-x: auto !important;
+        overflow-y: hidden !important;
+        -webkit-overflow-scrolling: touch;
+        padding-bottom: 6px;
     }
-    div[data-testid="stRadio"]:has(input[id*="main_tab_active"]) > div[role="radiogroup"] > label {
+    div[role="radiogroup"][aria-label="메인 메뉴"] > label {
+        flex: 0 0 auto !important;
         min-height: 2.1rem !important;
         height: auto !important;
         overflow: visible !important;
         white-space: nowrap;
         padding: 4px 10px !important;
         font-size: 0.9rem !important;
+    }
+    /* 탭처럼 보이도록 라디오 동그라미 표시는 숨김(선택 여부는 배경색으로 구분됨) */
+    div[role="radiogroup"][aria-label="메인 메뉴"] > label > div:first-child {
+        display: none !important;
     }
     </style>
     """,
@@ -13221,107 +13233,118 @@ if "🏛️ 국세청(국고)" in tabs and active_tab == "🏛️ 국세청(국�
 
 
         # 4) 국고 템플릿 추가/수정/삭제 (국고 전용)
-        render_template_section_divider()        
+        render_template_section_divider()
         st.markdown("### 🧩 국고 템플릿 추가/수정/삭제")
 
-        tpls = api_list_treasury_templates_cached().get("templates", [])
-        pick_labels = ["(새로 추가)"] + [f"{t.get('order', 999999)} | {treasury_template_display(t)}" for t in tpls]
-        tpl_by_pick = {f"{t.get('order', 999999)} | {treasury_template_display(t)}": t for t in tpls}
+        # ✅ "편집 대상" 선택 시 자동 입력이 전체 탭을 다시 그리지 않도록 fragment로 분리
+        def _draw_treasury_tpl_ui():
+            tpls = api_list_treasury_templates_cached().get("templates", [])
+            pick_labels = ["(새로 추가)"] + [f"{t.get('order', 999999)} | {treasury_template_display(t)}" for t in tpls]
+            tpl_by_pick = {f"{t.get('order', 999999)} | {treasury_template_display(t)}": t for t in tpls}
 
-        if st.session_state.get("tre_tpl_reset_req", False):
-            st.session_state["tre_tpl_pick"] = "(새로 추가)"
-            st.session_state["tre_tpl_pick_prev"] = "(새로 추가)"
-            st.session_state["tre_tpl_label"] = ""
-            st.session_state["tre_tpl_kind_kr"] = "세입"
-            st.session_state["tre_tpl_amount"] = 0
-            st.session_state["tre_tpl_order"] = 1
-            st.session_state["tre_tpl_reset_req"] = False
-        
-        picked = st.selectbox("편집 대상", pick_labels, key="tre_tpl_pick")
-
-        edit_tpl = tpl_by_pick.get(picked) if picked != "(새로 추가)" else None
-
-        # ✅ 편집 대상이 바뀌면 입력칸(라벨/종류/금액/순서)도 즉시 동기화
-        prev_pick_key = "tre_tpl_pick_prev"
-        if st.session_state.get(prev_pick_key) != picked:
-            if edit_tpl:
-                st.session_state["tre_tpl_label"] = str(edit_tpl.get("label", ""))
-                st.session_state["tre_tpl_kind_kr"] = ("세출" if str(edit_tpl.get("kind", "income")) == "expense" else "세입")
-                st.session_state["tre_tpl_amount"] = int(edit_tpl.get("amount", 0) or 0)
-                st.session_state["tre_tpl_order"] = int(edit_tpl.get("order", 1) or 1)
-            else:
+            if st.session_state.get("tre_tpl_reset_req", False):
+                st.session_state["tre_tpl_pick"] = "(새로 추가)"
+                st.session_state["tre_tpl_pick_prev"] = "(새로 추가)"
                 st.session_state["tre_tpl_label"] = ""
                 st.session_state["tre_tpl_kind_kr"] = "세입"
                 st.session_state["tre_tpl_amount"] = 0
                 st.session_state["tre_tpl_order"] = 1
-            st.session_state[prev_pick_key] = picked
+                st.session_state["tre_tpl_reset_req"] = False
 
-        f1, f2, f3, f4 = st.columns([2.2, 1.2, 1.2, 1.0])
-        with f1:
-            lab_in = st.text_input("라벨(내역)", key="tre_tpl_label").strip()
-        with f2:
-            # ✅ 화면에는 한글(세입/세출)로, 저장은 income/expense 그대로
-            kind_map = {"세입": "income", "세출": "expense"}
+            picked = st.selectbox("편집 대상", pick_labels, key="tre_tpl_pick")
 
-            kind_kr = st.selectbox(
-                "종류",
-                ["세입", "세출"],
-                key="tre_tpl_kind_kr",
-                help="세입=income, 세출=expense (저장은 자동으로 처리됩니다)",
-            )
+            edit_tpl = tpl_by_pick.get(picked) if picked != "(새로 추가)" else None
 
-            # ✅ 아래 저장 버튼에서 kind_in을 그대로 쓰도록, 변수명 kind_in 유지
-            kind_in = kind_map.get(kind_kr, "income")
-        with f3:
-            amt_in = st.number_input("금액", min_value=0, step=1, key="tre_tpl_amount")
-        with f4:
-            ord_in = st.number_input("순서", min_value=1, step=1, key="tre_tpl_order")
-
-        b1, b2, b3 = st.columns(3)
-        with b1:
-            if st.button("✅ 저장", use_container_width=True, key="tre_tpl_save", disabled=(not writable)):
-                if not writable:
-                    st.error("관리자 전용입니다.")
+            # ✅ 편집 대상이 바뀌면 입력칸(라벨/종류/금액/순서)도 즉시 동기화
+            prev_pick_key = "tre_tpl_pick_prev"
+            if st.session_state.get(prev_pick_key) != picked:
+                if edit_tpl:
+                    st.session_state["tre_tpl_label"] = str(edit_tpl.get("label", ""))
+                    st.session_state["tre_tpl_kind_kr"] = ("세출" if str(edit_tpl.get("kind", "income")) == "expense" else "세입")
+                    st.session_state["tre_tpl_amount"] = int(edit_tpl.get("amount", 0) or 0)
+                    st.session_state["tre_tpl_order"] = int(edit_tpl.get("order", 1) or 1)
                 else:
-                    res = api_upsert_treasury_template(
-                        admin_pin=ADMIN_PIN,
-                        template_id=(edit_tpl.get("template_id") if edit_tpl else ""),
-                        label=lab_in,
-                        kind=kind_in,
-                        amount=int(amt_in),
-                        order=int(ord_in),
-                    )
-                    if res.get("ok"):
-                        toast("국고 템플릿 저장 완료!", icon="✅")
-                        st.session_state["tre_tpl_reset_req"] = True
-                        st.rerun()
-                    else:
-                        st.error(res.get("error", "저장 실패"))
+                    st.session_state["tre_tpl_label"] = ""
+                    st.session_state["tre_tpl_kind_kr"] = "세입"
+                    st.session_state["tre_tpl_amount"] = 0
+                    st.session_state["tre_tpl_order"] = 1
+                st.session_state[prev_pick_key] = picked
 
-        with b2:
-            if st.button("🧹 입력 초기화", use_container_width=True, key="tre_tpl_clear"):
-                st.session_state.pop("tre_tpl_label", None)
-                st.session_state.pop("tre_tpl_kind_kr", None)
-                st.session_state.pop("tre_tpl_amount", None)
-                st.session_state.pop("tre_tpl_order", None)
-                st.session_state.pop("tre_tpl_pick_prev", None)
-                st.session_state["tre_tpl_pick"] = "(새로 추가)"
-                st.rerun()
+            f1, f2, f3, f4 = st.columns([2.2, 1.2, 1.2, 1.0])
+            with f1:
+                lab_in = st.text_input("라벨(내역)", key="tre_tpl_label").strip()
+            with f2:
+                # ✅ 화면에는 한글(세입/세출)로, 저장은 income/expense 그대로
+                kind_map = {"세입": "income", "세출": "expense"}
 
-        with b3:
-            if st.button("🗑️ 삭제", use_container_width=True, key="tre_tpl_del", disabled=(not writable or edit_tpl is None)):
-                if not writable:
-                    st.error("관리자 전용입니다.")
-                elif not edit_tpl:
-                    st.stop()
-                else:
-                    res = api_delete_treasury_template(ADMIN_PIN, str(edit_tpl.get("template_id")))
-                    if res.get("ok"):
-                        toast_and_rerun("국고 템플릿 삭제 완료!", icon="🗑️")
+                kind_kr = st.selectbox(
+                    "종류",
+                    ["세입", "세출"],
+                    key="tre_tpl_kind_kr",
+                    help="세입=income, 세출=expense (저장은 자동으로 처리됩니다)",
+                )
+
+                # ✅ 아래 저장 버튼에서 kind_in을 그대로 쓰도록, 변수명 kind_in 유지
+                kind_in = kind_map.get(kind_kr, "income")
+            with f3:
+                amt_in = st.number_input("금액", min_value=0, step=1, key="tre_tpl_amount")
+            with f4:
+                ord_in = st.number_input("순서", min_value=1, step=1, key="tre_tpl_order")
+
+            b1, b2, b3 = st.columns(3)
+            with b1:
+                if st.button("✅ 저장", use_container_width=True, key="tre_tpl_save", disabled=(not writable)):
+                    if not writable:
+                        st.error("관리자 전용입니다.")
                     else:
-                        st.error(res.get("error", "삭제 실패"))
+                        res = api_upsert_treasury_template(
+                            admin_pin=ADMIN_PIN,
+                            template_id=(edit_tpl.get("template_id") if edit_tpl else ""),
+                            label=lab_in,
+                            kind=kind_in,
+                            amount=int(amt_in),
+                            order=int(ord_in),
+                        )
+                        if res.get("ok"):
+                            toast("국고 템플릿 저장 완료!", icon="✅")
+                            st.session_state["tre_tpl_reset_req"] = True
+                            st.rerun()
+                        else:
+                            st.error(res.get("error", "저장 실패"))
+
+            with b2:
+                if st.button("🧹 입력 초기화", use_container_width=True, key="tre_tpl_clear"):
+                    st.session_state.pop("tre_tpl_label", None)
+                    st.session_state.pop("tre_tpl_kind_kr", None)
+                    st.session_state.pop("tre_tpl_amount", None)
+                    st.session_state.pop("tre_tpl_order", None)
+                    st.session_state.pop("tre_tpl_pick_prev", None)
+                    st.session_state["tre_tpl_pick"] = "(새로 추가)"
+                    st.rerun()
+
+            with b3:
+                if st.button("🗑️ 삭제", use_container_width=True, key="tre_tpl_del", disabled=(not writable or edit_tpl is None)):
+                    if not writable:
+                        st.error("관리자 전용입니다.")
+                    elif not edit_tpl:
+                        st.stop()
+                    else:
+                        res = api_delete_treasury_template(ADMIN_PIN, str(edit_tpl.get("template_id")))
+                        if res.get("ok"):
+                            toast_and_rerun("국고 템플릿 삭제 완료!", icon="🗑️")
+                        else:
+                            st.error(res.get("error", "삭제 실패"))
+
+        _frag = getattr(st, "fragment", None)
+        if callable(_frag):
+            _frag(_draw_treasury_tpl_ui)()
+        else:
+            _draw_treasury_tpl_ui()
 
         st.markdown("### 📥 국고 템플릿 엑셀로 일괄 추가")
+
+        # ✅ 위 fragment 함수 안에서만 쓰이던 tpls를 아래 엑셀 다운로드에서도 써야 해서 다시 조회(캐시됨)
+        tpls = api_list_treasury_templates_cached().get("templates", [])
 
         import io
 
@@ -13499,50 +13522,58 @@ if "📊 통계청" in tabs and active_tab == "📊 통계청":
 
         # -------------------------
         # (상단) 제출물 내역 추가
+        # ✅ 템플릿 선택 시 자동 입력이 전체 탭을 다시 그리지 않도록 fragment로 분리
         # -------------------------
-        st.markdown("### ➕ 제출물 내역 추가")
+        def _draw_stat_add_ui():
+            st.markdown("### ➕ 제출물 내역 추가")
 
-        stat_tpls = api_list_stat_templates_cached().get("templates", [])
-        stat_tpl_labels = ["(직접 입력)"] + [str(t.get("label", "") or "") for t in stat_tpls]
-        # (PATCH) 저장 후 템플릿/내역 입력값을 안전하게 초기화(위젯 생성 전에만 세팅 가능)
+            stat_tpls = api_list_stat_templates_cached().get("templates", [])
+            stat_tpl_labels = ["(직접 입력)"] + [str(t.get("label", "") or "") for t in stat_tpls]
+            # (PATCH) 저장 후 템플릿/내역 입력값을 안전하게 초기화(위젯 생성 전에만 세팅 가능)
 
-        if st.session_state.get("stat_add_reset_req", False):
-            st.session_state["stat_add_tpl"] = "(직접 입력)"
-            st.session_state["stat_add_tpl_prev"] = "(직접 입력)"
-            st.session_state["stat_add_label"] = ""
+            if st.session_state.get("stat_add_reset_req", False):
+                st.session_state["stat_add_tpl"] = "(직접 입력)"
+                st.session_state["stat_add_tpl_prev"] = "(직접 입력)"
+                st.session_state["stat_add_label"] = ""
 
-            # 표 로컬 편집 상태도 새로 로드되게
-            st.session_state["stat_loaded_sig"] = ""
-            st.session_state["stat_edit"] = {}
+                # 표 로컬 편집 상태도 새로 로드되게
+                st.session_state["stat_loaded_sig"] = ""
+                st.session_state["stat_edit"] = {}
 
-            st.session_state["stat_add_reset_req"] = False
+                st.session_state["stat_add_reset_req"] = False
 
-        # 템플릿 선택
-        stat_pick = st.selectbox("제출물 템플릿", stat_tpl_labels, key="stat_add_tpl")
+            # 템플릿 선택
+            stat_pick = st.selectbox("제출물 템플릿", stat_tpl_labels, key="stat_add_tpl")
 
-        # 템플릿 고르면 내역 자동 입력
-        if "stat_add_tpl_prev" not in st.session_state:
-            st.session_state["stat_add_tpl_prev"] = stat_pick
+            # 템플릿 고르면 내역 자동 입력
+            if "stat_add_tpl_prev" not in st.session_state:
+                st.session_state["stat_add_tpl_prev"] = stat_pick
 
-        if stat_pick != st.session_state.get("stat_add_tpl_prev"):
-            st.session_state["stat_add_tpl_prev"] = stat_pick
-            if stat_pick != "(직접 입력)":
-                st.session_state["stat_add_label"] = stat_pick
+            if stat_pick != st.session_state.get("stat_add_tpl_prev"):
+                st.session_state["stat_add_tpl_prev"] = stat_pick
+                if stat_pick != "(직접 입력)":
+                    st.session_state["stat_add_label"] = stat_pick
 
-        add_c1, add_c2 = st.columns([3.0, 1.0])
-        with add_c1:
-            add_label = st.text_input("내역", key="stat_add_label").strip()
-        with add_c2:
-            if st.button("저장", use_container_width=True, key="stat_add_save"):
-                if not add_label:
-                    st.error("내역을 입력해 주세요.")
-                else:
-                    res = api_admin_add_stat_submission(ADMIN_PIN, add_label, active_accounts=stu_rows)
-                    if res.get("ok"):
-                        st.session_state["stat_add_reset_req"] = True
-                        toast_and_rerun("제출물 내역 추가 완료!", icon="✅")
+            add_c1, add_c2 = st.columns([3.0, 1.0])
+            with add_c1:
+                add_label = st.text_input("내역", key="stat_add_label").strip()
+            with add_c2:
+                if st.button("저장", use_container_width=True, key="stat_add_save"):
+                    if not add_label:
+                        st.error("내역을 입력해 주세요.")
                     else:
-                        st.error(res.get("error", "추가 실패"))
+                        res = api_admin_add_stat_submission(ADMIN_PIN, add_label, active_accounts=stu_rows)
+                        if res.get("ok"):
+                            st.session_state["stat_add_reset_req"] = True
+                            toast_and_rerun("제출물 내역 추가 완료!", icon="✅")
+                        else:
+                            st.error(res.get("error", "추가 실패"))
+
+        _frag = getattr(st, "fragment", None)
+        if callable(_frag):
+            _frag(_draw_stat_add_ui)()
+        else:
+            _draw_stat_add_ui()
 
 
         # -------------------------
@@ -14141,74 +14172,82 @@ div[data-testid="stElementContainer"]:has(.stat_bulk_text){
         render_template_section_divider()
         st.markdown("### 🧩 통계표 템플릿 추가/수정/삭제")
 
-        tpl_items = api_list_stat_templates_cached().get("templates", [])
-        tpl_pick_labels = ["(새로 추가)"] + [f"{t.get('order', 999999)} | {t.get('label','')}" for t in tpl_items]
-        tpl_by_pick = {f"{t.get('order', 999999)} | {t.get('label','')}": t for t in tpl_items}
+        # ✅ "편집 대상" 선택 시 자동 입력이 전체 탭을 다시 그리지 않도록 fragment로 분리
+        def _draw_stat_tpl_ui():
+            tpl_items = api_list_stat_templates_cached().get("templates", [])
+            tpl_pick_labels = ["(새로 추가)"] + [f"{t.get('order', 999999)} | {t.get('label','')}" for t in tpl_items]
+            tpl_by_pick = {f"{t.get('order', 999999)} | {t.get('label','')}": t for t in tpl_items}
 
-        if st.session_state.get("stat_tpl_reset_req", False):
-            st.session_state["stat_tpl_pick"] = "(새로 추가)"
-            st.session_state["stat_tpl_pick_prev"] = "(새로 추가)"
-            st.session_state["stat_tpl_label"] = ""
-            st.session_state["stat_tpl_order"] = 1
-            st.session_state["stat_tpl_reset_req"] = False
-            
-        tpl_picked = st.selectbox("편집 대상", tpl_pick_labels, key="stat_tpl_pick")
-
-        edit_tpl = tpl_by_pick.get(tpl_picked) if tpl_picked != "(새로 추가)" else None
-
-        prev_pick_key = "stat_tpl_pick_prev"
-        if st.session_state.get(prev_pick_key) != tpl_picked:
-            if edit_tpl:
-                st.session_state["stat_tpl_label"] = str(edit_tpl.get("label", ""))
-                st.session_state["stat_tpl_order"] = int(edit_tpl.get("order", 1) or 1)
-            else:
+            if st.session_state.get("stat_tpl_reset_req", False):
+                st.session_state["stat_tpl_pick"] = "(새로 추가)"
+                st.session_state["stat_tpl_pick_prev"] = "(새로 추가)"
                 st.session_state["stat_tpl_label"] = ""
                 st.session_state["stat_tpl_order"] = 1
-            st.session_state[prev_pick_key] = tpl_picked
+                st.session_state["stat_tpl_reset_req"] = False
 
-        t1, t2 = st.columns([3.0, 1.0])
-        with t1:
-            tpl_label_in = st.text_input("템플릿 내역", key="stat_tpl_label").strip()
-        with t2:
-            tpl_order_in = st.number_input("순서", min_value=1, step=1, key="stat_tpl_order")
+            tpl_picked = st.selectbox("편집 대상", tpl_pick_labels, key="stat_tpl_pick")
 
-        bb1, bb2, bb3 = st.columns(3)
-        with bb1:
-            if st.button("✅ 저장", use_container_width=True, key="stat_tpl_save_btn"):
-                resu = api_admin_upsert_stat_template(
-                    admin_pin=ADMIN_PIN,
-                    template_id=(edit_tpl.get("template_id") if edit_tpl else ""),
-                    label=tpl_label_in,
-                    order=int(tpl_order_in),
-                )
-                if resu.get("ok"):
-                    toast("템플릿 저장 완료!", icon="✅")
-                    st.session_state["stat_loaded_sig"] = ""
-                    st.session_state["stat_tpl_reset_req"] = True
-                    st.rerun()
+            edit_tpl = tpl_by_pick.get(tpl_picked) if tpl_picked != "(새로 추가)" else None
+
+            prev_pick_key = "stat_tpl_pick_prev"
+            if st.session_state.get(prev_pick_key) != tpl_picked:
+                if edit_tpl:
+                    st.session_state["stat_tpl_label"] = str(edit_tpl.get("label", ""))
+                    st.session_state["stat_tpl_order"] = int(edit_tpl.get("order", 1) or 1)
                 else:
-                    st.error(resu.get("error", "저장 실패"))
+                    st.session_state["stat_tpl_label"] = ""
+                    st.session_state["stat_tpl_order"] = 1
+                st.session_state[prev_pick_key] = tpl_picked
 
-        with bb2:
-            if st.button("🧹 입력 초기화", use_container_width=True, key="stat_tpl_clear_btn"):
-                st.session_state.pop("stat_tpl_label", None)
-                st.session_state.pop("stat_tpl_order", None)
-                st.session_state.pop("stat_tpl_pick_prev", None)
-                st.session_state["stat_tpl_pick"] = "(새로 추가)"
-                st.rerun()
+            t1, t2 = st.columns([3.0, 1.0])
+            with t1:
+                tpl_label_in = st.text_input("템플릿 내역", key="stat_tpl_label").strip()
+            with t2:
+                tpl_order_in = st.number_input("순서", min_value=1, step=1, key="stat_tpl_order")
 
-        with bb3:
-            if st.button("🗑️ 삭제", use_container_width=True, key="stat_tpl_del_btn", disabled=(edit_tpl is None)):
-                if not edit_tpl:
-                    st.stop()
-                resd2 = api_admin_delete_stat_template(ADMIN_PIN, str(edit_tpl.get("template_id")))
-                if resd2.get("ok"):
-                    toast("템플릿 삭제 완료!", icon="🗑️")
-                    st.session_state["stat_loaded_sig"] = ""
-                    st.session_state["stat_tpl_reset_req"] = True
+            bb1, bb2, bb3 = st.columns(3)
+            with bb1:
+                if st.button("✅ 저장", use_container_width=True, key="stat_tpl_save_btn"):
+                    resu = api_admin_upsert_stat_template(
+                        admin_pin=ADMIN_PIN,
+                        template_id=(edit_tpl.get("template_id") if edit_tpl else ""),
+                        label=tpl_label_in,
+                        order=int(tpl_order_in),
+                    )
+                    if resu.get("ok"):
+                        toast("템플릿 저장 완료!", icon="✅")
+                        st.session_state["stat_loaded_sig"] = ""
+                        st.session_state["stat_tpl_reset_req"] = True
+                        st.rerun()
+                    else:
+                        st.error(resu.get("error", "저장 실패"))
+
+            with bb2:
+                if st.button("🧹 입력 초기화", use_container_width=True, key="stat_tpl_clear_btn"):
+                    st.session_state.pop("stat_tpl_label", None)
+                    st.session_state.pop("stat_tpl_order", None)
+                    st.session_state.pop("stat_tpl_pick_prev", None)
+                    st.session_state["stat_tpl_pick"] = "(새로 추가)"
                     st.rerun()
-                else:
-                    st.error(resd2.get("error", "삭제 실패"))
+
+            with bb3:
+                if st.button("🗑️ 삭제", use_container_width=True, key="stat_tpl_del_btn", disabled=(edit_tpl is None)):
+                    if not edit_tpl:
+                        st.stop()
+                    resd2 = api_admin_delete_stat_template(ADMIN_PIN, str(edit_tpl.get("template_id")))
+                    if resd2.get("ok"):
+                        toast("템플릿 삭제 완료!", icon="🗑️")
+                        st.session_state["stat_loaded_sig"] = ""
+                        st.session_state["stat_tpl_reset_req"] = True
+                        st.rerun()
+                    else:
+                        st.error(resd2.get("error", "삭제 실패"))
+
+        _frag = getattr(st, "fragment", None)
+        if callable(_frag):
+            _frag(_draw_stat_tpl_ui)()
+        else:
+            _draw_stat_tpl_ui()
 
 # =========================
 # 💳 신용등급 탭
@@ -15372,6 +15411,7 @@ div[data-testid="stDataFrame"] * { font-size: 0.80rem !important; }
 # =========================
 # 🛒 마트 탭
 # =========================
+@fragment_if_available
 def _render_mart_user_ui(login_name: str, login_pin: str, my_student_id: str):
     cfg = api_get_mart_config()
     weekly_limit = int(cfg.get("weekly_limit", 0) or 0)
