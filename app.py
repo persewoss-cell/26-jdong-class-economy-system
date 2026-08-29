@@ -11239,6 +11239,15 @@ if "🔎 개별조회" in tabs and active_tab == "🔎 개별조회":
                                     "삭제하는 내역이 월급 입금이면 국고에 반영됐던 공제 세입도 함께 환급됩니다."
                                 )
 
+                                admin_del_pin = st.text_input(
+                                    "관리자 비밀번호(PIN)",
+                                    type="password",
+                                    key=f"ind_del_pin_{sid}",
+                                )
+                                do_delete_clicked = st.button(
+                                    "선택 항목 삭제", key=f"ind_del_go_{sid}", use_container_width=True
+                                )
+
                                 def _can_delete_row(row):
                                     memo = str(row.get("memo", "") or "")
                                     ttype = str(row.get("type", "") or "")
@@ -11283,12 +11292,7 @@ if "🔎 개별조회" in tabs and active_tab == "🔎 개별조회":
                                     if ck and can:
                                         selected_del_ids.append(tx_id)
 
-                                admin_del_pin = st.text_input(
-                                    "관리자 비밀번호(PIN)",
-                                    type="password",
-                                    key=f"ind_del_pin_{sid}",
-                                )
-                                if st.button("선택 항목 삭제", key=f"ind_del_go_{sid}", use_container_width=True):
+                                if do_delete_clicked:
                                     if not selected_del_ids:
                                         st.warning("체크된 항목이 없어요.")
                                     elif str(admin_del_pin or "").strip() != str(ADMIN_PIN):
