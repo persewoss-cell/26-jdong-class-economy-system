@@ -11222,7 +11222,6 @@ if "🔎 개별조회" in tabs and active_tab == "🔎 개별조회":
                                 "created_at_utc",
                                 ascending=False
                             )
-                            render_tx_table(df_tx)
 
                             # -------------------------
                             # 🗑️ 통장내역 삭제(관리자)
@@ -11315,6 +11314,8 @@ if "🔎 개별조회" in tabs and active_tab == "🔎 개별조회":
                                             st.rerun()
                                         else:
                                             st.error(res_del.get("error", "삭제 실패"))
+
+                            render_tx_table(df_tx)
 
 if "📈 투자" in tabs and active_tab == "📈 투자":
     with tab_map["📈 투자"]:
