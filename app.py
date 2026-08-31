@@ -4200,6 +4200,18 @@ def api_get_open_auction_round() -> dict:
 def api_open_auction(admin_pin: str, bid_name: str, affiliation: str):
     if not is_admin_pin(admin_pin):
         return {"ok": False, "error": "관리자 PIN이 틀립니다."}
+
+    # ✅ 직전 경매가 마감됐어도 국고(장부) 반영이 안 끝났으면 새 경매를 열 수 없음
+    pending = list(
+        db.collection("auction_rounds")
+        .where(filter=build_filter("status", "==", "closed"))
+        .where(filter=build_filter("ledger_applied", "==", False))
+        .limit(1)
+        .stream()
+    )
+    if pending:
+        return {"ok": False, "error": "현재 진행되는 경매가 완료되지 않았습니다. (직전 경매의 장부/국고 반영을 먼저 완료해 주세요)"}
+
     bid_name = str(bid_name or "").strip()
     affiliation = str(affiliation or "").strip()
     if not bid_name:
@@ -4678,6 +4690,17 @@ def api_get_open_lottery_round() -> dict:
 def api_open_lottery(admin_pin: str, cfg: dict):
     if not is_admin_pin(admin_pin):
         return {"ok": False, "error": "관리자 PIN이 틀립니다."}
+
+    # ✅ 직전 복권이 마감/추첨됐어도 국고(장부) 반영이 안 끝났으면 새 복권을 열 수 없음
+    pending = list(
+        db.collection("lottery_rounds")
+        .where(filter=build_filter("status", "in", ["closed", "drawn"]))
+        .where(filter=build_filter("ledger_applied", "==", False))
+        .limit(1)
+        .stream()
+    )
+    if pending:
+        return {"ok": False, "error": "현재 진행되는 복권이 완료되지 않았습니다. (직전 복권의 장부/국고 반영을 먼저 완료해 주세요)"}
 
     ticket_price = int(cfg.get("ticket_price", 20) or 20)
     tax_rate = int(cfg.get("tax_rate", 40) or 40)
@@ -16321,8 +16344,53 @@ if "🏷️ 경매" in tabs and active_tab == "🏷️ 경매":
                             st.dataframe(pd.DataFrame(past_view_rows), use_container_width=True, hide_index=True)
                         else:
                             st.info("선택한 회차에 제출된 입찰표가 없습니다.")
+
+                        # ✅ 조회한 회차가 아직 장부(국고) 반영이 안 됐으면, 여기서 바로 반영할 수 있게 버튼 노출
+                        sel_ledger_done = bool(sel_round.get("ledger_applied", False))
+                        if sel_ledger_done:
+                            st.caption("✅ 이미 장부 반영된 경매입니다.")
+                        elif past_view_rows:
+                            st.warning("⚠️ 이 회차는 아직 장부(국고) 반영이 완료되지 않았습니다.")
+
+                            def _auc_past_toggle_no(_rid=sel_round_id):
+                                if st.session_state.get(f"auc_past_refund_no_{_rid}", False):
+                                    st.session_state[f"auc_past_refund_yes_{_rid}"] = False
+
+                            def _auc_past_toggle_yes(_rid=sel_round_id):
+                                if st.session_state.get(f"auc_past_refund_yes_{_rid}", False):
+                                    st.session_state[f"auc_past_refund_no_{_rid}"] = False
+
+                            pctrl1, pctrl2, pctrl3 = st.columns(3)
+                            with pctrl1:
+                                past_no_refund = st.checkbox(
+                                    "낙찰금 미반환",
+                                    key=f"auc_past_refund_no_{sel_round_id}",
+                                    on_change=_auc_past_toggle_no,
+                                )
+                            with pctrl2:
+                                past_yes_refund = st.checkbox(
+                                    "낙찰금 반환(반환액 90%)",
+                                    key=f"auc_past_refund_yes_{sel_round_id}",
+                                    on_change=_auc_past_toggle_yes,
+                                )
+                            with pctrl3:
+                                past_apply_clicked = st.button(
+                                    "장부반영", key=f"auc_past_apply_btn_{sel_round_id}", use_container_width=True
+                                )
+
+                            if past_apply_clicked:
+                                if (not past_no_refund) and (not past_yes_refund):
+                                    st.warning("낙찰금 반환 여부를 선택 후 장부 반영 버튼을 눌러 주세요")
+                                else:
+                                    past_res = api_apply_auction_ledger(
+                                        ADMIN_PIN, sel_round_id, refund_non_winners=bool(past_yes_refund)
+                                    )
+                                    if past_res.get("ok"):
+                                        toast_and_rerun("경매 관리장부 + 국고 세입 반영 완료", icon="✅")
+                                    else:
+                                        st.error(past_res.get("error", "장부 반영 실패"))
             else:
-                st.info("조회 가능한 마감 경매가 없습니다.")            
+                st.info("조회 가능한 마감 경매가 없습니다.")
                                     
             st.markdown("### 📚 경매 관리 장부")
             led = api_list_auction_admin_ledger(limit=100)
@@ -16600,6 +16668,36 @@ if "🍀 복권" in tabs and active_tab == "🍀 복권":
                             st.dataframe(pd.DataFrame(past_lot_rows), use_container_width=True, hide_index=True)
                         else:
                             st.info("선택한 회차의 참여 결과가 없습니다.")
+
+                        # ✅ 조회한 회차가 아직 당첨금 지급/장부(국고) 반영이 안 됐으면, 여기서 바로 처리할 수 있게 버튼 노출
+                        lot_status = str(lot_round.get("status", "") or "")
+                        lot_payout_done = bool(lot_round.get("payout_done", False))
+                        lot_ledger_done = bool(lot_round.get("ledger_applied", False))
+
+                        if lot_status != "drawn":
+                            st.warning("⚠️ 이 회차는 아직 추첨(당첨번호 제출)이 완료되지 않았습니다. 위 '복권 추첨하기'에서 진행해 주세요.")
+                        elif lot_payout_done and lot_ledger_done:
+                            st.caption("✅ 이미 당첨금 지급 및 장부 반영이 완료된 회차입니다.")
+                        else:
+                            st.warning("⚠️ 이 회차는 아직 당첨금 지급/장부(국고) 반영이 완료되지 않았습니다.")
+                            if st.button(
+                                "당첨금 지급 및 장부 반영",
+                                key=f"lot_past_finalize_btn_{lot_round_id}",
+                                use_container_width=True,
+                            ):
+                                past_finalize_ok = True
+                                if not lot_payout_done:
+                                    past_pay_res = api_pay_lottery_prizes(ADMIN_PIN, lot_round_id)
+                                    if not past_pay_res.get("ok"):
+                                        st.error(past_pay_res.get("error", "당첨금 지급 실패"))
+                                        past_finalize_ok = False
+                                if past_finalize_ok and (not lot_ledger_done):
+                                    past_led_res = api_apply_lottery_ledger(ADMIN_PIN, lot_round_id)
+                                    if not past_led_res.get("ok"):
+                                        st.error(past_led_res.get("error", "장부 반영 실패"))
+                                        past_finalize_ok = False
+                                if past_finalize_ok:
+                                    toast_and_rerun("당첨금 지급 및 장부 반영 완료", icon="✅")
             else:
                 st.info("조회 가능한 마감 복권 회차가 없습니다.")
             
